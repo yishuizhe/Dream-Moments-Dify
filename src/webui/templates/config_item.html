@@ -1,0 +1,71 @@
+<label class="form-label">
+    <span class="badge badge-info rounded-pill" 
+        data-bs-toggle="tooltip" 
+        title="{{ key }}">
+        <i class="bi bi-info-circle"></i>
+    </span>
+    {{ config.description }}
+</label>
+{% if key == 'LISTEN_LIST' %}
+    <div class="input-group mb-2">
+        <input type="text" class="form-control" 
+            id="input_{{ key }}" 
+            placeholder="请输入要监听的值">
+        <button class="btn btn-primary" type="button" 
+            onclick="addToList('{{ key }}')">
+            <i class="bi bi-plus-lg"></i>
+        </button>
+    </div>
+    <div class="input-group mb-2">
+        <input type="text" class="form-control" 
+            id="remove_input_{{ key }}" 
+            placeholder="请输入要移除的值">
+        <button class="btn btn-danger" type="button" 
+            onclick="removeFromList('{{ key }}')">
+            <i class="bi bi-dash-lg"></i>
+        </button>
+    </div>
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value|join(',') }}"
+        placeholder="多个值用英文逗号分隔"
+        readonly>
+{% elif key == 'DEEPSEEK_BASE_URL' %}
+    <select class="form-select mb-2" onchange="document.getElementById('DEEPSEEK_BASE_URL').value = this.value === 'siliconflow' ? 'https://api.siliconflow.cn/v1/' : 'https://api.deepseek.com/v1'">
+        <option value="siliconflow" {% if config.value == 'https://api.siliconflow.cn/v1/' %}selected{% endif %}>硅基流动</option>
+        <option value="deepseek" {% if config.value == 'https://api.deepseek.com/v1' %}selected{% endif %}>deepseek</option>
+    </select>
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value }}">
+{% elif key == 'PROMPT_ENHANCEMENT' %}
+    <select class="form-select" id="{{ key }}" name="{{ key }}">
+        <option value="True" {% if config.value %}selected{% endif %}>启用</option>
+        <option value="False" {% if not config.value %}selected{% endif %}>停用</option>
+    </select>
+{% elif config.value is boolean %}
+    <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" role="switch" 
+            id="{{ key }}" name="{{ key }}" 
+            {% if config.value %}checked{% endif %}>
+        <label class="form-check-label" for="{{ key }}">
+            {{ '启用' if config.value else '停用' }}
+        </label>
+    </div>
+{% elif key == 'MODEL' %}
+    <select class="form-select mb-2" onchange="document.getElementById('MODEL').value = this.value">
+        <option value="deepseek-ai/DeepSeek-V3">硅基流动V3模型（免费额度版）</option>
+        <option value="deepseek-ai/DeepSeek-R1">硅基流动R1模型（免费额度版）</option>
+        <option value="Pro/deepseek-ai/DeepSeek-V3">硅基流动V3模型（付费版）</option>
+        <option value="Pro/deepseek-ai/DeepSeek-R1">硅基流动R1模型（付费版）</option>
+        <option value="deepseek-chat">deepseek官方V3模型</option>
+        <option value="deepseek-reasoner">deepseek官方R1模型</option>
+    </select>
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value }}">
+{% else %}
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value }}">
+{% endif %} 
