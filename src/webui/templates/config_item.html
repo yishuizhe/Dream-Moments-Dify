@@ -1,0 +1,96 @@
+<label class="form-label">
+    <span class="badge badge-info rounded-pill" 
+        data-bs-toggle="tooltip" 
+        title="{{ key }}">
+        <i class="bi bi-info-circle"></i>
+    </span>
+    {{ config.description }}
+</label>
+{% if key == 'LISTEN_LIST' %}
+    <div class="mb-2">
+        <div class="input-group mb-2">
+            <input type="text" class="form-control" 
+                id="input_{{ key }}" 
+                placeholder="请输入要监听的用户">
+            <button class="btn btn-primary" type="button" 
+                onclick="addNewUser('{{ key }}')">
+                <i class="bi bi-plus-lg"></i>
+            </button>
+        </div>
+        <div id="selected_users_{{ key }}" class="list-group">
+            {% if config.value %}
+                {% for user in config.value %}
+                    {% if user %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            {{ user }}
+                            <button type="button" class="btn btn-danger btn-sm" onclick="removeUser('{{ key }}', '{{ user }}')">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value|join(',') }}"
+        placeholder="多个值用英文逗号分隔"
+        readonly
+        style="display: none;">
+{% elif key == 'DEEPSEEK_BASE_URL' %}
+    <select class="form-select mb-2" onchange="document.getElementById('DEEPSEEK_BASE_URL').value = this.value === 'siliconflow' ? 'https://api.siliconflow.cn/v1/' : 'https://api.deepseek.com/v1'">
+        <option value="siliconflow" {% if config.value == 'https://api.siliconflow.cn/v1/' %}selected{% endif %}>硅基流动</option>
+        <option value="deepseek" {% if config.value == 'https://api.deepseek.com/v1' %}selected{% endif %}>deepseek</option>
+    </select>
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value }}">
+{% elif key == 'PROMPT_ENHANCEMENT' %}
+    <select class="form-select" id="{{ key }}" name="{{ key }}">
+        <option value="True" {% if config.value %}selected{% endif %}>启用</option>
+        <option value="False" {% if not config.value %}selected{% endif %}>停用</option>
+    </select>
+{% elif key == 'AVATAR_DIR' %}
+    <select class="form-select" id="{{ key }}" name="{{ key }}">
+        {% for option in config.options %}
+        <option value="{{ option }}" {% if option == config.value %}selected{% endif %}>
+            {{ option.split('/')[-1] }}
+        </option>
+        {% endfor %}
+    </select>
+{% elif config.value is boolean %}
+    <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" role="switch" 
+            id="{{ key }}" name="{{ key }}" 
+            {% if config.value %}checked{% endif %}>
+        <label class="form-check-label" for="{{ key }}">
+            {{ '启用' if config.value else '停用' }}
+        </label>
+    </div>
+{% elif key == 'MODEL' %}
+    <select class="form-select mb-2" onchange="document.getElementById('MODEL').value = this.value">
+        <option value="deepseek-ai/DeepSeek-V3">硅基流动V3模型（免费额度版）</option>
+        <option value="deepseek-ai/DeepSeek-R1">硅基流动R1模型（免费额度版）</option>
+        <option value="Pro/deepseek-ai/DeepSeek-V3">硅基流动V3模型（付费版）</option>
+        <option value="Pro/deepseek-ai/DeepSeek-R1">硅基流动R1模型（付费版）</option>
+        <option value="deepseek-chat">deepseek官方V3模型</option>
+        <option value="deepseek-reasoner">deepseek官方R1模型</option>
+    </select>
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value }}">
+{% elif config.type == "number" %}
+    <input type="number" 
+           class="form-control" 
+           id="{{ key }}" 
+           name="{{ key }}" 
+           value="{{ config.value }}"
+           step="0.1"  {# 允许输入小数 #}
+           {% if config.min is defined %}min="{{ config.min }}"{% endif %}
+           {% if config.max is defined %}max="{{ config.max }}"{% endif %}>
+{% else %}
+    <input type="text" class="form-control" 
+        id="{{ key }}" name="{{ key }}" 
+        value="{{ config.value }}">
+{% endif %} 
