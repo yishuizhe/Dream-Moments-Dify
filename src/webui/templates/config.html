@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="KouriChat - 配置中心">
+    <meta name="keywords" content="AI,KouriChat">
+    <meta name="theme-color" content="#6366f1">
+    <title>KouriChat - 配置中心</title>
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdmirror.com/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="/static/mom.ico">
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --secondary-color: #4f46e5;
+            --background-color: #f0f4f8;  /* 更柔和的浅蓝灰色背景 */
+            --text-color: #1e293b;
+            --card-bg: rgba(255, 255, 255, 0.494);
+            --card-border: rgba(255, 255, 255, 0.5);
+            --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        [data-bs-theme="dark"] {
+            --background-color: #1a1f2e;  /* 更柔和的深色背景 */
+            --text-color: #f8fafc;
+            --card-bg: rgba(30, 41, 59, 0.612);
+            --card-border: rgba(255, 255, 255, 0.1);
+            --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+        }
+        html,body{
+            height:100%;
+            margin: 0;
+        }
+        body {
+            background: var(--background-color);
+            color: var(--text-color);
+            transition: all 0.3s ease;
+            background-repeat: no-repeat;
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+
+        .config-section {
+            background: var(--card-bg);
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+            border-radius: 1rem;
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+            padding: 2rem;
+            margin-bottom: 2rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: slideUp 0.5s ease forwards;
+            animation-delay: 0.1s;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 添加卡片微妙的装饰效果 */
+        .config-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(to right, var(--primary-color), var(--secondary-color));
+            opacity: 0.5;
+        }
+
+        .form-control, .form-select {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--card-border) !important;
+            background: var(--card-bg);
+            color: var(--text-color);
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus, .form-select:focus {
+            border-color: var(--primary-color) !important;
+            box-shadow: 0 0 0 0.25rem rgba(99, 102, 241, 0.25);
+            outline: none;
+        }
+
+        .form-switch .form-check-input {
+            width: 3em;
+            height: 1.5em;
+            margin-left: -3.5em;
+        }
+
+        .form-label {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .badge-info {
+            background: var(--primary-color);
+            cursor: pointer;
+        }
+
+        .theme-switcher {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            z-index: 1000;
+        }
+
+        .accordion-button {
+            background: transparent;
+            border: none;
+        }
+
+        .accordion-button:not(.collapsed) {
+            background: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--primary-color);
+        }
+
+        .accordion-item {
+            background: transparent;
+            border-color: var(--card-border);
+        }
+
+        .toast {
+            border-radius: 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .form-check-label {
+            margin-top: 0;
+        }
+
+        /* 人设选择下拉栏样式 */
+        select[name="AVATAR_DIR"] {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+
+        .navbar .form-check.form-switch {
+            display: flex;
+            align-items: center;
+            height: 100%;
+            margin: 0;
+        }
+
+
+        .navbar .form-check-label {
+            display: flex;
+            align-items: center;
+            margin: 0 0 0 8px;
+            line-height: 1;
+        }
+
+
+        .navbar .form-check-input {
+            margin: 0;
+            vertical-align: middle;
+        }
+
+        /* 输入框组样式 */
+        .input-group {
+            border: 1px solid var(--card-border);
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+
+        .input-group .form-control {
+            border: none !important;
+        }
+
+        /* 配置项容器样式 */
+        .config-item {
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* 响应式布局 */
+        @media (max-width: 700px) {
+            .config-section {
+                padding: 1rem;
+            }
+        }
+
+        /* 密码输入框样式 */
+        .password-input-group {
+            position: relative;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-color);
+            opacity: 0.7;
+        }
+
+        .password-toggle:hover {
+            opacity: 1;
+        }
+
+        /* 修改左右两栏的间距 */
+        @media (min-width: 768px) {
+            .col-md-6.pe-md-2 {
+                padding-right: 1.5rem !important;  /* 增加右边距 */
+            }
+            
+            .col-md-6.ps-md-2 {
+                padding-left: 1.5rem !important;   /* 增加左边距 */
+            }
+        }
+
+        /* 修改响应式布局下的间距 */
+        @media (max-width: 767px) {
+            .col-md-6 {
+                margin-bottom: 2rem;  /* 增加上下间距 */
+            }
+            
+            .config-section {
+                margin-bottom: 0;  /* 移除原有的底部间距 */
+            }
+            
+            /* 为了让背景更好地显示，增加内容区域的内边距 */
+            main.container-fluid {
+                padding: 2rem 1rem;  /* 调整移动端的内边距 */
+            }
+            
+            /* 为底部保存按钮留出空间 */
+            main.container-fluid {
+                padding-bottom: 5rem;  /* 底部留出更多空间 */
+            }
+        }
+
+        /* 优化桌面端布局 */
+        @media (min-width: 768px) {
+            .col-md-6.pe-md-2 {
+                padding-right: 1.5rem !important;
+            }
+            
+            .col-md-6.ps-md-2 {
+                padding-left: 1.5rem !important;
+            }
+            
+            main.container-fluid {
+                padding: 2rem;
+                padding-bottom: 5rem;  /* 为底部保存按钮留出空间 */
+            }
+        }
+
+        /* 修改主容器的内边距 */
+        main.container-fluid {
+            padding: 2rem;  /* 增加整体内边距 */
+        }
+
+        /* 添加相同的基础样式 */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        main {
+            flex: 1 0 auto;
+            width: 100%;
+            padding: 2rem 0;
+        }
+
+        /* 添加通知动画 */
+        .toast {
+            transition: all 0.3s ease;
+            transform: translateY(-20px);
+            opacity: 0;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        /* 优化按钮悬停效果 */
+        .btn-outline-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* 添加输入框过渡效果 */
+        #customApiInput {
+            transition: all 0.3s ease;
+        }
+
+        #customApiInput.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        #customApiInput.hide {
+            transform: translateY(-10px);
+            opacity: 0;
+        }
+
+        /* 添加通知容器样式 */
+        .notification-container {
+            z-index: 1050;
+        }
+    </style>
+    <script defer src="http://umami.kourichat.com/script.js" data-website-id="319cc5bc-c057-4f6c-8bc4-4af5e110add1"></script>
+    <script src="/static/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/dark-mode.js"></script>
+</head>
+<body>
+    {% include 'navbar.html' %}
+    
+    <main class="container-fluid py-4">
+        <div class="row">
+            <!-- 左侧基础配置 -->
+            <div class="col-md-6 pe-md-2">
+                <div class="config-section h-100">
+                    <h4 class="mb-4">
+                        <i class="bi bi-gear-fill me-2"></i>基础配置
+                    </h4>
+                    <form id="configForm">
+                        {% for group_name, configs in config_groups.items() %}
+                            {% if group_name == '基础配置' %}
+                            <div class="accordion mb-3">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header">
+                                        <button class="accordion-button" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#{{ group_name|replace(' ', '-') }}">
+                                            {{ group_name }}
+                                        </button>
+                                    </h2>
+                                    <div id="{{ group_name|replace(' ', '-') }}" class="accordion-collapse collapse show">
+                                        <div class="accordion-body">
+                                            {% for key, config in configs.items() %}
+                                            <div class="mb-4">
+                                                {% include 'config_item.html' %}
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    </form>
+                </div>
+            </div>
+
+            <!-- 右侧其他配置 -->
+            <div class="col-md-6 ps-md-2">
+                <div class="config-section h-100">
+                    <h4 class="mb-4">
+                        <i class="bi bi-sliders me-2"></i>高级配置
+                    </h4>
+                    <form id="otherConfigForm">
+                        {% for group_name, configs in config_groups.items() %}
+                            {% if group_name != '基础配置' %}
+                            <div class="accordion mb-3">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#{{ group_name|replace(' ', '-') }}">
+                                            {{ group_name }}
+                                        </button>
+                                    </h2>
+                                    <div id="{{ group_name|replace(' ', '-') }}" class="accordion-collapse collapse">
+                                        <div class="accordion-body">
+                                            {% for key, config in configs.items() %}
+                                            <div class="mb-4">
+                                                {% include 'config_item.html' %}
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- 保存按钮固定在底部 -->
+        <div class="position-fixed bottom-0 start-0 w-100 bg-body p-3 shadow-lg">
+            <div class="container-fluid">
+                <div class="row">
+                    <div class="col-12">
+                        <button type="button" 
+                            class="btn btn-primary btn-lg w-100" 
+                            id="saveButton">
+                            <i class="bi bi-save me-2"></i>保存所有设置
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast-container">
+        <div class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-body">
+                <i class="bi bi-exclamation-triangle-fill text-danger"></i>
+                <span class="toast-message"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 在 body 标签下添加顶部通知区域 -->
+    <div class="position-fixed top-0 start-50 translate-middle-x p-3 notification-container">
+        <div id="saveNotification" class="toast align-items-center text-white bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="bi bi-check-circle-fill me-2"></i>
+                    <span id="saveNotificationMessage"></span>
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="关闭通知"></button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 护眼模式切换
+        function toggleDarkMode() {
+            document.body.setAttribute('data-bs-theme', 
+                document.body.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark');
+        }
+
+        // 初始化工具提示
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        })
+
+        // 等待 DOM 加载完成
+        document.addEventListener('DOMContentLoaded', function() {
+            // 获取保存按钮
+            const saveButton = document.getElementById('saveButton');
+            
+            // 添加点击事件监听器
+            saveButton.addEventListener('click', function() {
+                const mainForm = document.getElementById('configForm');
+                const otherForm = document.getElementById('otherConfigForm');
+                const config = {};
+                
+                // 获取所有表单数据
+                const formData = new FormData(mainForm);
+                
+                // 调试输出所有表单数据
+                for (let [key, value] of formData.entries()) {
+                    console.log(`Form data - ${key}: ${value}`);
+                    // 特别处理温度参数
+                    if (key === 'TEMPERATURE') {
+                        value = parseFloat(value);
+                        console.log(`处理后的温度值: ${value}`);
+                    }
+                    processFormValue(config, key, value);
+                }
+                
+                if (otherForm) {
+                    const otherFormData = new FormData(otherForm);
+                    for (let [key, value] of otherFormData.entries()) {
+                        processFormValue(config, key, value);
+                    }
+                }
+
+                // 特别检查温度值
+                const temperatureSlider = document.getElementById('TEMPERATURE_slider');
+                const temperatureInput = document.getElementById('TEMPERATURE');
+                if (temperatureSlider && temperatureInput) {
+                    const tempValue = parseFloat(temperatureSlider.value);
+                    config['TEMPERATURE'] = tempValue;
+                    console.log(`Final temperature value from slider: ${tempValue}`);
+                }
+
+                // 发送保存请求
+                fetch('/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showSaveNotification(data.message);
+                    } else {
+                        showSaveNotification(data.message, 'error');
+                    }
+                })
+                .catch(error => {
+                    showSaveNotification('保存失败：' + error, 'error');
+                });
+            });
+
+            // 初始化背景
+            fetch('/get_background')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success' && data.path) {
+                        document.body.style.backgroundImage = `url('${data.path}')`;
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        });
+
+        function processFormValue(config, key, value) {
+            // 添加调试日志
+            console.log(`Processing ${key}: ${value} (type: ${typeof value})`);
+            
+            if (key === 'LISTEN_LIST') {
+                config[key] = value.split(',').map(item => item.trim());
+            } else if (key === 'TEMPERATURE') {
+                // 特殊处理温度参数
+                const tempValue = parseFloat(value);
+                config[key] = tempValue;
+                console.log(`Processed temperature to: ${config[key]} (type: ${typeof config[key]})`);
+            } else if (value.toLowerCase() === 'true' || value.toLowerCase() === 'false') {
+                config[key] = value.toLowerCase() === 'true';
+            } else if (!isNaN(value) && value !== '') {
+                config[key] = Number(value);
+            } else {
+                config[key] = value;
+            }
+        }
+
+        // 添加新函数
+        function addToListFromSelect(key, value) {
+            if (value === 'add_new') {
+                document.getElementById('new_input_' + key).style.display = 'flex';
+                setTimeout(() => {
+                    document.querySelector(`select[onchange*="${key}"]`).value = '';
+                }, 100);
+                return;
+            }
+            
+            if (value) {
+                const targetElement = document.getElementById(key);
+                const currentValues = targetElement.value ? targetElement.value.split(',') : [];
+                if (!currentValues.includes(value)) {
+                    currentValues.push(value);
+                    targetElement.value = currentValues.join(',');
+                    
+                    // 添加到用户列表显示
+                    const userListElement = document.getElementById('selected_users_' + key);
+                    const userDiv = document.createElement('div');
+                    userDiv.className = 'list-group-item d-flex justify-content-between align-items-center';
+                    userDiv.innerHTML = `
+                        ${value}
+                        <button type="button" class="btn btn-danger btn-sm" onclick="removeUser('${key}', '${value}')">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    `;
+                    userListElement.appendChild(userDiv);
+                }
+            }
+        }
+
+        function addNewUser(key) {
+            const inputElement = document.getElementById('input_' + key);
+            const newValue = inputElement.value.trim();
+            
+            if (newValue) {
+                const targetElement = document.getElementById(key);
+                const currentValues = targetElement.value ? targetElement.value.split(',') : [];
+                if (!currentValues.includes(newValue)) {
+                    currentValues.push(newValue);
+                    targetElement.value = currentValues.join(',');
+                    
+                    // 添加到用户列表显示
+                    const userListElement = document.getElementById('selected_users_' + key);
+                    const userDiv = document.createElement('div');
+                    userDiv.className = 'list-group-item d-flex justify-content-between align-items-center';
+                    userDiv.innerHTML = `
+                        ${newValue}
+                        <button type="button" class="btn btn-danger btn-sm" onclick="removeUser('${key}', '${newValue}')">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    `;
+                    userListElement.appendChild(userDiv);
+                    
+                    // 清空输入框
+                    inputElement.value = '';
+                }
+            }
+        }
+
+        function removeUser(key, userToRemove) {
+            const targetElement = document.getElementById(key);
+            const userListElement = document.getElementById('selected_users_' + key);
+            
+            // 更新隐藏的input值
+            let currentValues = targetElement.value ? targetElement.value.split(',') : [];
+            currentValues = currentValues.filter(user => user !== userToRemove);
+            targetElement.value = currentValues.join(',');
+            
+            // 从显示列表中移除
+            const userElements = userListElement.getElementsByClassName('list-group-item');
+            for (let element of userElements) {
+                if (element.textContent.trim() === userToRemove) {
+                    element.remove();
+                    break;
+                }
+            }
+        }
+
+        // 添加背景图片上传处理
+        document.getElementById('backgroundInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const formData = new FormData();
+                formData.append('background', file);
+                
+                fetch('/upload_background', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        document.body.style.backgroundImage = `url('${data.path}')`;
+                        showToast(data.message, 'success');
+                    } else {
+                        showToast(data.message, 'danger');
+                    }
+                })
+                .catch(error => {
+                    showToast('上传失败：' + error, 'danger');
+                });
+            }
+        });
+
+        function updateTemperature(key, value) {
+            const displayElement = document.getElementById(key + '_display');
+            if (displayElement) {
+                displayElement.classList.add('updating');
+                displayElement.textContent = parseFloat(value).toFixed(1);
+
+                setTimeout(() => {
+                    displayElement.classList.remove('updating');
+                }, 300);
+            }
+        }
+
+        function showSaveNotification(message, type = 'success') {
+            const notification = document.getElementById('saveNotification');
+            const messageElement = document.getElementById('saveNotificationMessage');
+            
+            // 移除现有的背景色类
+            notification.classList.remove('bg-success', 'bg-danger');
+            
+            // 根据类型设置样式
+            if (type === 'success') {
+                notification.classList.add('bg-success');
+            } else {
+                notification.classList.add('bg-danger');
+            }
+            
+            messageElement.textContent = message;
+            
+            const toast = new bootstrap.Toast(notification, {
+                animation: true,
+                autohide: true,
+                delay: 3000
+            });
+            toast.show();
+        }
+    </script>
+</body>
+</html>

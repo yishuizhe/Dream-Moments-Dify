@@ -1,0 +1,108 @@
+{% extends "auth_base.html" %}
+
+{% block title %}快速设置{% endblock %}
+
+{% block header %}快速设置{% endblock %}
+{% block subheader %}完成即可直接启动使用基础对话功能{% endblock %}
+
+{% block content %}
+<div class="auth-wrapper">
+    <form id="quickSetupForm" onsubmit="handleQuickSetup(event)">
+ 
+        <div class="mb-2">
+            <label for="inputField" class="form-label">要监听的用户列表（请使用微信昵称，不要使用备注名）</label>
+            <input type="text" class="form-control" id="inputField" placeholder="请输入用户昵称" required>
+        </div>
+
+        <div class="d-flex justify-content-between mb-2">
+            <button type="button" class="btn btn-secondary" onclick="skipSetup()">跳过</button>
+            <button type="submit" class="btn btn-primary">下一步</button>
+        </div>
+    </form>
+</div>
+
+<div id="apiKeySection" style="display: none; margin-top: 10px;">
+    <div class="mb-2">
+        <label for="apiKey" class="form-label">API密钥</label>
+        <input type="text" class="form-control" id="apiKey" placeholder="请输入API密钥" required>
+        <small class="form-text text-muted">
+            还没有API密钥？<a href="https://siliconflow.cn/zh-cn/" target="_blank">点我获取</a>
+        </small>
+    </div>
+
+    <div class="d-flex justify-content-between mb-2">
+        <button type="button" class="btn btn-secondary" onclick="skipSetup()">跳过</button>
+        <button type="button" class="btn btn-primary" onclick="saveSetup()">保存设置</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+    function handleQuickSetup(event) {
+        event.preventDefault();
+        
+        const inputField = document.getElementById('inputField').value.trim();
+        
+        if (inputField === '') {
+            showError('输入不能为空');
+            return;
+        }
+
+        // 显示API密钥输入框
+        document.getElementById('quickSetupForm').style.display = 'none';
+        document.getElementById('apiKeySection').style.display = 'block';
+    }
+
+    function saveSetup() {
+        const inputField = document.getElementById('inputField').value.trim();
+        const apiKey = document.getElementById('apiKey').value.trim();
+        
+        if (inputField === '' || apiKey === '') {
+            showError('输入不能为空');
+            return;
+        }
+
+        // 发送数据到服务器
+        fetch('/save_quick_setup', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                listen_list: inputField.split(',').map(item => item.trim()),
+                api_key: apiKey
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                // 完成所有步骤，重定向到仪表盘
+                window.location.href = '/dashboard';
+            } else {
+                showError(data.message || '保存设置失败');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showError('网络错误，请重试');
+        });
+    }
+
+    function skipSetup() {
+        // 跳过设置，直接重定向到仪表盘
+        window.location.href = '/dashboard';
+    }
+
+    function showError(message) {
+        const alert = document.getElementById('errorAlert');
+        const errorMessage = document.getElementById('errorMessage');
+        errorMessage.textContent = message;
+        alert.style.display = 'block';
+        
+        setTimeout(() => {
+            alert.style.display = 'none';
+        }, 3000);
+    }
+</script>
+{% endblock %} 
