@@ -1,3 +1,4 @@
+# 2026年1月14日编辑——该项目已经失效！请勿再折腾。
 # Dream-Moments-Dify
 
 简体中文 · [English](./README_EN.md) 
