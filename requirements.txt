@@ -1,4 +1,4 @@
-# WeChat 4 free foreground automation (requires Python >=3.9,<3.14)
+# WeChat 4 free foreground automation (requires Python >=3.10,<3.14)
 wxauto4==41.1.2
 
 # Core services

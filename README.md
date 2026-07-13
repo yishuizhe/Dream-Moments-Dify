@@ -1,5 +1,9 @@
 # Dream-Moments-Dify
 
+[![CI](https://github.com/yishuizhe/Dream-Moments-Dify/actions/workflows/ci.yml/badge.svg)](https://github.com/yishuizhe/Dream-Moments-Dify/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/yishuizhe/Dream-Moments-Dify)](https://github.com/yishuizhe/Dream-Moments-Dify/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/yishuizhe/Dream-Moments-Dify/total)](https://github.com/yishuizhe/Dream-Moments-Dify/releases)
+
 基于 **My-Dream-Moments / KouriChat** 的 Windows 微信 4 私人聊天机器人实验项目。
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -66,7 +70,7 @@ flowchart LR
 
 - Windows 10/11
 - 已登录的微信 4 客户端
-- Python `>=3.9,<3.14`
+- Python `>=3.10,<3.14`
 - 建议先用测试账号、一个好友或一个群验证
 
 `wxauto4==41.1.2` 不支持 Python 3.8。安装依赖和运行项目必须使用同一个 Python 解释器：
