@@ -11,6 +11,7 @@ This project preserves the original attribution and GPLv3 license. It does not b
 - Free `wxauto4==41.1.2` adapter with WeChat `4.1.11.x` nickname compatibility.
 - `GetSession()`-driven polling: chats are opened once to build a baseline, then only unread or preview-changed whitelisted chats are opened.
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
+- Enforces normal punctuation and concise sentences, repairs obvious unpunctuated replies, and automatically splits long replies into natural WeChat bubbles without requiring model backslashes.
 - Group messages can also trigger the bot by quoting a previous bot message, and replies no longer automatically mention the triggering member.
 - External `plugins/*/dream_plugin.py` support with isolated failures and direct command replies.
 - Emotion-aware animated cat GIFs from Google Noto Emoji Animation.
@@ -57,6 +58,15 @@ The first polling round opens whitelisted chats to build message baselines. Late
 
 Group chats can trigger the bot with `@bot-name`, by mentioning the bot name as a standalone name, or by quoting a previous bot message. Quoting another member does not trigger the bot. Replies are sent without automatically mentioning the sender.
 
+## AI reply formatting
+
+A shared formatting rule is appended to character prompts, followed by a send-time safety pass:
+
+- everyday replies favor 2-4 concise sentences with normal punctuation;
+- obvious long unpunctuated Chinese replies receive conservative punctuation repair;
+- replies are split by paragraphs, sentence boundaries, and length before sending;
+- legacy backslash separators remain compatible, but new character prompts should not request them or prohibit punctuation.
+
 ## External group plugins
 
 Dream discovers `plugins/*/dream_plugin.py` at startup. Install GroupFun from the Dream project root:
@@ -83,6 +93,8 @@ python -m unittest discover -s tests -v
 python test.py
 python -m compileall -q src tests run.py run_config_web.py test.py
 ```
+
+Tests cover message deduplication, unread-driven polling, quote triggers, plugin isolation, no automatic group mentions, AI provider switching, reply punctuation repair and bubble splitting, configuration persistence, and the WeChat compatibility layer.
 
 ## Disclaimer
 

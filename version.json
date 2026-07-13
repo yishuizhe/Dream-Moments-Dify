@@ -1,5 +1,5 @@
 {
-    "version": "1.5.0",
+    "version": "1.5.1",
     "last_update": "2026-07-14",
-    "description": "新增 Dream 外部群聊插件系统、GroupFun 适配和微信引用回复触发，并保留免费 wxauto4 智能轮询、DeepSeek 直连与情绪 GIF。"
+    "description": "修复 AI 日常回复过长、缺少标点和不分段问题，新增统一格式约束、保守标点修复和微信气泡自动拆分。"
 }

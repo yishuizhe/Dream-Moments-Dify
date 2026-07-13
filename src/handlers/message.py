@@ -17,6 +17,7 @@ import random
 import os
 from services.ai.dify import DifyAI
 from services.ai.deepseek import DeepSeekAI
+from utils.reply_formatter import build_system_prompt, normalize_reply_text, split_reply_bubbles
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,19 @@ class MessageHandler:
 
     def get_api_response(self, message: str, user_id: str) -> str:
         """从当前配置的 AI 提供方获取回复。"""
-        return self.ai.get_response(message, user_id, self.prompt_content)
+        return self.ai.get_response(
+            message,
+            user_id,
+            build_system_prompt(self.prompt_content),
+        )
+
+    def _send_text_reply(self, chat_id: str, reply: str) -> None:
+        """Split a reply into natural WeChat bubbles with pauses only between bubbles."""
+        parts = split_reply_bubbles(reply)
+        for index, part in enumerate(parts):
+            self.wx.SendMsg(msg=part, who=chat_id)
+            if index < len(parts) - 1:
+                time.sleep(random.randint(1, 2))
 
     def process_messages(self, chat_id: str):
         """处理消息队列中的消息"""
@@ -131,9 +144,9 @@ class MessageHandler:
             # 检查是否为语音请求
             if self.voice_handler.is_voice_request(merged_message):
                 logger.info("检测到语音请求")
-                reply = self.get_api_response(merged_message, chat_id)
-                if "</think>" in reply:
-                    reply = reply.split("</think>", 1)[1].strip()
+                reply = normalize_reply_text(
+                    self.get_api_response(merged_message, chat_id)
+                )
 
                 voice_path = self.voice_handler.generate_voice(reply)
                 if voice_path:
@@ -141,14 +154,14 @@ class MessageHandler:
                         self.wx.SendFiles(filepath=voice_path, who=chat_id)
                     except Exception as e:
                         logger.error(f"发送语音失败: {str(e)}")
-                        self.wx.SendMsg(msg=reply, who=chat_id)
+                        self._send_text_reply(chat_id, reply)
                     finally:
                         try:
                             os.remove(voice_path)
                         except Exception as e:
                             logger.error(f"删除临时语音文件失败: {str(e)}")
                 else:
-                    self.wx.SendMsg(msg=reply, who=chat_id)
+                    self._send_text_reply(chat_id, reply)
 
                 # 异步保存消息记录
                 threading.Thread(target=self.save_message,
@@ -200,19 +213,13 @@ class MessageHandler:
             # 处理普通文本回复
             else:
                 logger.info("处理普通文本回复")
-                reply = self.get_api_response(merged_message, chat_id)
-                if "</think>" in reply:
-                    reply = reply.split("</think>", 1)[1].strip()
+                reply = normalize_reply_text(
+                    self.get_api_response(merged_message, chat_id)
+                )
                 logger.info("AI reply generated for chat %s", chat_id)
 
-                # 发送文本回复
-                if '\\' in reply:
-                    parts = [p.strip() for p in reply.split('\\') if p.strip()]
-                    for part in parts:
-                        self.wx.SendMsg(msg=part, who=chat_id)
-                        time.sleep(random.randint(2, 4))
-                else:
-                    self.wx.SendMsg(msg=reply, who=chat_id)
+                # Automatically split by punctuation instead of model backslashes.
+                self._send_text_reply(chat_id, reply)
 
                 # 检查回复中是否包含情感关键词并发送表情包
                 logger.info("开始检查AI回复的情感关键词")
