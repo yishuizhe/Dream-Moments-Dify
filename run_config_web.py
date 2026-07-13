@@ -790,7 +790,7 @@ def confirm_update():
             
             return jsonify({
                 'status': 'success' if result['success'] else 'error',
-                'console_output': result['output']
+                'console_output': '更新完成' if result['success'] else '更新失败，请查看服务日志'
             })
         else:
             return jsonify({
