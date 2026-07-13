@@ -26,16 +26,10 @@ class ImageHandler:
         self.image_model = image_model
         self.temp_dir = os.path.join(root_dir, "data", "images", "temp")
         
-        # 复用消息模块的AI实例(使用正确的模型名称)
-        self.text_ai = DeepSeekAI(
-            api_key=api_key,
-            base_url=base_url,
-            model="deepseek-ai/DeepSeek-V3",  # 修改为默认免费模型
-            max_token=2048,
-            temperature=0.5,
-            max_groups=15
-        )
-        
+        # Image prompt optimization is optional for Dify-only deployments.
+        # Create the OpenAI-compatible client only when an image feature needs it.
+        self.text_ai = None
+
         # 多语言提示模板
         self.prompt_templates = {
             'basic': (
@@ -93,6 +87,22 @@ class ImageHandler:
         self.prompt_extend_threshold = 30  # 字符数阈值
 
         os.makedirs(self.temp_dir, exist_ok=True)
+
+    def _get_text_ai(self) -> DeepSeekAI:
+        if self.text_ai is None:
+            if not self.api_key or not self.base_url:
+                raise RuntimeError(
+                    "Image prompt optimization requires llm_settings.api_key and base_url"
+                )
+            self.text_ai = DeepSeekAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model="deepseek-ai/DeepSeek-V3",
+                max_token=2048,
+                temperature=0.5,
+                max_groups=15,
+            )
+        return self.text_ai
 
     def is_random_image_request(self, message: str) -> bool:
         """检查消息是否为请求图片的模式"""
@@ -207,7 +217,7 @@ class ImageHandler:
             if len(prompt) >= 30:  # 长度足够则不扩展
                 return prompt
                 
-            response = self.text_ai.chat(
+            response = self._get_text_ai().chat(
                 messages=[{"role": "user", "content": self.prompt_templates['basic'].format(prompt=prompt)}],
                 temperature=0.7
             )
@@ -237,7 +247,7 @@ class ImageHandler:
             # 获取现有通用负面词前10个作为示例
             existing_samples = ', '.join(self.base_negative_prompts[:10])
             
-            response = self.text_ai.chat([{
+            response = self._get_text_ai().chat([{
                 "role": "user",
                 "content": self.negative_prompt_template.format(
                     prompt=prompt,
@@ -268,13 +278,13 @@ class ImageHandler:
         """多阶段提示词优化"""
         try:
             # 第一阶段：基础优化
-            stage1 = self.text_ai.chat([{
+            stage1 = self._get_text_ai().chat([{
                 "role": "user",
                 "content": self.prompt_templates['basic'].format(prompt=prompt)
             }])
             
             # 第二阶段：创意增强
-            stage2 = self.text_ai.chat([{
+            stage2 = self._get_text_ai().chat([{
                 "role": "user",
                 "content": self.prompt_templates['creative'].format(prompt=prompt)
             }])

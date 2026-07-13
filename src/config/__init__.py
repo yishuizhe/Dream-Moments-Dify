@@ -7,9 +7,34 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _as_bool(value, default: bool = False) -> bool:
+    """兼容 JSON 布尔值以及 Web 表单常见的字符串布尔值。"""
+
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
 @dataclass
 class UserSettings:
     listen_list: List[str]
+
+@dataclass
+class WeChatSettings:
+    poll_interval: float = 2.0
+    history_size: int = 50
+    state_file: str = "data/wechat_poll_state.json"
+    process_existing_on_start: bool = False
+    exact_match: bool = True
 
 @dataclass
 class LLMSettings:
@@ -17,9 +42,10 @@ class LLMSettings:
     base_url: str
     dify_api_key: str
     dify_base_url: str
-    # model: str
-    # max_tokens: int
-    # temperature: float
+    provider: str = "deepseek"
+    model: str = "deepseek-chat"
+    max_tokens: int = 2000
+    temperature: float = 1.0
 
 @dataclass
 class ImageRecognitionSettings:
@@ -73,6 +99,7 @@ class AuthSettings:
 class Config:
     def __init__(self):
         self.user: UserSettings
+        self.wechat: WeChatSettings
         self.llm: LLMSettings
         self.media: MediaSettings
         self.behavior: BehaviorSettings
@@ -144,17 +171,57 @@ class Config:
                 self.user = UserSettings(
                     listen_list=user_data['listen_list']['value']
                 )
+
+                # WeChat 4 free polling settings; keep old configs compatible.
+                wechat_data = categories.get('wechat_settings', {}).get('settings', {})
+                self.wechat = WeChatSettings(
+                    poll_interval=float(
+                        wechat_data.get('poll_interval', {}).get('value', 2.0)
+                    ),
+                    history_size=int(
+                        wechat_data.get('history_size', {}).get('value', 50)
+                    ),
+                    state_file=str(
+                        wechat_data.get('state_file', {}).get(
+                            'value',
+                            'data/wechat_poll_state.json',
+                        )
+                    ),
+                    process_existing_on_start=_as_bool(
+                        wechat_data.get('process_existing_on_start', {}).get(
+                            'value',
+                            False,
+                        ),
+                        default=False,
+                    ),
+                    exact_match=_as_bool(
+                        wechat_data.get('exact_match', {}).get('value', True),
+                        default=True,
+                    ),
+                )
                 
                 # LLM设置
                 llm_data = categories['llm_settings']['settings']
+                provider = str(
+                    llm_data.get('provider', {}).get('value', 'deepseek')
+                ).strip().lower()
+                if provider not in {"deepseek", "dify"}:
+                    provider = "deepseek"
                 self.llm = LLMSettings(
-                    api_key=llm_data['api_key']['value'],
-                    base_url=llm_data['base_url']['value'],
-                    dify_api_key=llm_data['dify_api_key']['value'],
-                    dify_base_url=llm_data['dify_base_url']['value'],
-                    #model=llm_data['model']['value'],
-                    #max_tokens=llm_data['max_tokens']['value'],
-                    #temperature=llm_data['temperature']['value']
+                    api_key=llm_data.get('api_key', {}).get('value', ''),
+                    base_url=llm_data.get('base_url', {}).get('value', ''),
+                    dify_api_key=llm_data.get('dify_api_key', {}).get('value', ''),
+                    dify_base_url=llm_data.get('dify_base_url', {}).get('value', 'https://api.dify.ai/v1/'),
+                    provider=provider,
+                    model=str(
+                        llm_data.get('model', {}).get('value', 'deepseek-chat')
+                    ).strip() or 'deepseek-chat',
+                    max_tokens=int(
+                        llm_data.get('max_tokens', {}).get('value', 2000)
+                    ),
+                    temperature=float(
+                        llm_data.get('temperature', {}).get('value', 1.0)
+                    ),
                 )
                 
                 # 媒体设置

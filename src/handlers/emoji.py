@@ -14,15 +14,15 @@ import re
 from datetime import datetime
 import pyautogui
 import time
-from wxauto import WeChat
 from typing import Tuple, Optional
 from config import config
 
 logger = logging.getLogger(__name__)
 
 class EmojiHandler:
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, wechat=None):
         self.root_dir = root_dir
+        self.wechat = wechat
         self.emoji_dir = os.path.join(root_dir, config.behavior.context.avatar_dir, "emojis")
         self.screenshot_dir = os.path.join(root_dir, 'screenshot')
         
@@ -97,7 +97,11 @@ class EmojiHandler:
             
             try:
                 # 激活并定位微信聊天窗口
-                wx_chat = WeChat()
+                if self.wechat is None:
+                    from wxauto4 import WeChat
+                    wx_chat = WeChat(ads=False)
+                else:
+                    wx_chat = self.wechat
                 wx_chat.ChatWith(who)
                 chat_window = pyautogui.getWindowsWithTitle(who)[0]
                 

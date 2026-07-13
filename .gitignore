@@ -1,7 +1,9 @@
-# Ignore all folders in avatars except atri and mono
-avatars/
-!avatars/atri
-!avatars/mono
+# Track the bundled default avatar; ignore user-created/private avatar data.
+data/avatars/*
+!data/avatars/MONO/
+!data/avatars/MONO/avatar.md
+!data/avatars/MONO/emojis/
+!data/avatars/MONO/emojis/**
 # Database
 *.db
 *.sqlite
@@ -15,6 +17,8 @@ src/config/config.json
 logs/
 *.log
 wxauto文件/
+wxauto_logs/
+screenshot/
 @AutomationLog.txt
 
 # IntelliJ project files
@@ -188,3 +192,7 @@ cython_debug/
 
 .vscode/
 .cursorrules
+
+# WeChat polling runtime state
+data/wechat_poll_state.json
+data/wechat_poll_state.json.tmp

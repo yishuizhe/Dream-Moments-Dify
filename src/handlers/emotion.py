@@ -19,7 +19,7 @@ def load_negative_words(file_path):
         print(f"未找到否定词表文件: {file_path}")
         return []
 
-NEGATIVE_WORDS = load_negative_words('src\handlers\emodata\否定词表.txt')
+NEGATIVE_WORDS = load_negative_words("src/handlers/emodata/否定词表.txt")
 
 # 情感分类到情感类型和极性的映射关系
 CATEGORY_MAPPING = {

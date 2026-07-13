@@ -1,0 +1,22 @@
+# WeChat 4 free foreground automation (requires Python >=3.9,<3.14)
+wxauto4==41.1.2
+
+# Core services
+requests>=2.31.0
+colorama>=0.4.6
+openai>=1.0.0
+SQLAlchemy>=2.0.0
+tenacity>=8.2.0
+
+# Windows UI and media helpers
+PyAutoGUI>=0.9.54
+Pillow>=10.0.0
+psutil>=5.9.0
+
+# Web configuration UI
+Flask>=3.0.0
+
+# Existing text/data handlers
+jieba>=0.42.1
+pandas>=2.0.0
+snownlp>=0.12.3

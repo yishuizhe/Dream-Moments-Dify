@@ -1,155 +1,152 @@
-# 2026年1月14日编辑——该项目已经失效！请勿再折腾。
 # Dream-Moments-Dify
 
-简体中文 · [English](./README_EN.md) 
+基于 **My-Dream-Moments / KouriChat** 的 Windows 微信 4 私人聊天机器人实验项目。
 
-My-Dream-Moments (集成 Dify 的增强版-易水哲)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+> 本项目保留原项目署名和 GPLv3 许可证。它不破解 `wxautox4` Plus，也不包含付费包授权绕过代码；微信自动化使用免费版 `wxauto4` 的公开接口。
 
-   🚀 **My-Dream-Moments** 是一个基于 LLM（大语言模型）的情感陪伴程序，支持微信（WeChat），提供更真实的情感交互体验。 
+## 本分支改动
 
-​		本项目在 [KouriChat/KouriChat](https://github.com/KouriChat/KouriChat) 基础上进行了以下修改： 
+- **免费微信 4 适配**：使用 `wxauto4==41.1.2`，兼容微信 `4.1.11.x` 的昵称读取。
+- **智能未读轮询**：启动时仅为白名单会话建立一次消息基线；之后通过 `GetSession()` 检查未读数和会话预览，只在收到新消息时打开对应聊天，不再持续来回刷新窗口。
+- **双 AI 后端**：默认支持 DeepSeek、SiliconFlow 等 OpenAI-compatible Chat Completions API，也可切换到 Dify Chat API。
+- **群聊回复不自动 @**：群聊仍可通过 `@机器人昵称` 或单独提及机器人昵称触发，但机器人回复不会再次 `@触发者`。
+- **情绪 GIF 表情**：根据 AI 回复中的开心、难过、生气等关键词，发送对应的可爱动画猫咪表情。
+- **更简洁的输出与配置**：启动时只打印一份简洁版权横幅；控制台显示状态和警告，详细 INFO 日志写入 `logs/`；WebUI 仅展示常用微信轮询参数。
 
-## ⚡ 一些东西
+## 工作方式
 
-- **Dify 平台对接**：支持 Dify 作为大语言模型的后端，使 AI 响应更智能、更可控，dify平台地址：https://cloud.dify.ai/
-- **机器人唤醒优化**：修复电脑端微信@机器人无法触发的问题，增加机器人名字开头唤醒的功能。
-- 极少数情况可能出现回复不完整（已修复）。
-- 消息处理队列极少数情况可能出现自我递归死循环。（已修复）
-
-##  **🎨 未来要做** 
-
-- 更新到某个稳定版后，将不再更新。
-
-## ✨ 功能特性 
-
-- **微信机器人集成**：可与微信好友、群聊进行自然交流。 
-- **多轮对话支持**：更智能的对话管理，提供连贯的交流体验。 -
-- **Dify 平台支持**：可切换至 Dify 作为 AI 引擎，支持自定义 Prompt 及模型配置。 
-- **角色扮演模式**：沉浸式交流，支持个性化设定。 
-
-## 📦 一些说明 
-
-- 模型角色使用于dify平台的prompts。
-- 模型的温度等参数可以在dify平台设置。
-- 未修改更新代码，请不要自动更新。
-
-## 使用示例：
-
-个人私聊触发：
-
-![solo](doc/img/solo.png)
-
-群聊@触发：
-
-![png1](doc/img/png1.png)
-
-群聊开头触发：
-
-![png2](doc/img/png2.png)
-
-## 📌 安装 & 运行
-
-### 1. 前期准备
-
-1. **备用手机/安卓模拟器**  
-
-   微信电脑端登录必须有一个移动设备同时登录，因此不能使用您的主要设备。
-
-2. **微信小号**  
-
-   可以登录微信电脑版即可。
-
-3. **DeepSeek API Key**  
-
-   推荐使用：[获取 API Key（15元免费额度）](https://cloud.siliconflow.cn/i/aQXU6eC5)
-
-4. **Dify API Key**
-
-   https://cloud.dify.ai/
-
-5. **修改Dify应用的提示词**
-
-   无论模型是什么，需要加入以下内容，意思相近即可，其中两个\可以自定，用来设定AI回复几句话：
-
-   ```
-   注意：每次对话都要加\来分割对话，每次最多用两个\，最少可以不用。
-   或者
-   使用反斜线\分隔句子或短语，参考输出示例。模型的输出不应该带时间。
-   注意：每次最多用两个\。
-   输出示例
-   这个电影很好看呢，你喜欢吗？\这个问题的核心在于算法优化，可以从时间复杂度和空间复杂度两个角度分析……\你是不是偷偷学了我的爱好？\嗯？你是不是想考验我的逻辑？\嗯\我也是需要吃饭的\提拉米苏蛮好吃的\但好吃就是高兴呢！\这个问题需要分三步解决哦~\你在看奇怪的东西呢\你在说奇奇怪怪的东西
-   ```
-
-### 2. 部署项目
-
-####  1️⃣ 克隆仓库 
-
-```bash
-git clone https://github.com/yishuizhe/Dream-Moments-Dify.git 
-cd My-Dream-Moments-Dify
-```
-一键启动
-
-现原项目支持一键启动部署：
-
-run.bat即可
-
-手动如下：
-#### 2️⃣ 安装依赖
-
-```bash
-pip install -r requirements.txt
+```mermaid
+flowchart LR
+    A[GetSession 读取会话列表] --> B{白名单会话有未读或预览变化?}
+    B -- 否 --> A
+    B -- 是 --> C[打开发生变化的聊天]
+    C --> D[GetAllMessage 比较消息快照]
+    D --> E[调用 DeepSeek-compatible API 或 Dify]
+    E --> F[SendMsg 发送回复]
+    F --> G{检测到情绪关键词?}
+    G -- 是 --> H[SendFiles 发送对应 GIF]
+    G -- 否 --> A
+    H --> A
 ```
 
-#### 3️⃣  运行项目
+免费版仍属于**前台 UI 自动化**：启动首次建立基线时会逐个打开白名单会话；收到新消息、发送文字或发送文件时也可能切换到目标聊天。没有新消息时不会持续切换窗口。
 
-```bash
+## 环境要求
+
+- Windows 10/11
+- 已登录的微信 4 客户端
+- Python `>=3.9,<3.14`
+- 建议先用测试账号、一个好友或一个群验证
+
+`wxauto4==41.1.2` 不支持 Python 3.8。安装依赖和运行项目必须使用同一个 Python 解释器：
+
+```powershell
+python --version
+python -m pip --version
+python -m pip install -r requirements.txt
+```
+
+## 安装与配置
+
+```powershell
+git clone https://github.com/<owner>/Dream-Moments-Dify.git
+cd Dream-Moments-Dify
+python -m pip install -r requirements.txt
+Copy-Item src\config\config.json.template src\config\config.json
+python run_config_web.py
+```
+
+也可以直接编辑本地文件 `src/config/config.json`。该文件已加入 `.gitignore`，不要提交真实 API Key、微信昵称、联系人列表或私人角色设定。
+
+### 必填配置
+
+1. `LISTEN_LIST`：需要监听的微信昵称或群名。
+2. `AI_PROVIDER`：
+   - `deepseek`：直接调用 OpenAI-compatible API；
+   - `dify`：调用 Dify Chat API。
+3. 直连模式：填写 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`MODEL`。
+4. Dify 模式：填写 `DIFY_API_KEY`、`DIFY_BASE_URL`。
+5. `WECHAT_POLL_INTERVAL`：检查新消息的间隔，默认 `2.0` 秒。
+
+直连示例：
+
+```text
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=<your-api-key>
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1/
+MODEL=deepseek-chat
+MAX_TOKEN=2000
+TEMPERATURE=1.0
+```
+
+SiliconFlow 等兼容服务也可以使用，但模型名、Base URL 和 API Key 必须来自同一个服务商。若 Dify 返回 `PluginInvokeError`、供应商 `401` 或 `Authentication Fails`，通常是 Dify 应用内部配置的模型凭据失效，并非微信监听故障。
+
+## 运行
+
+```powershell
 python run.py
 ```
 
-原项目有问题可加群：715616260 
+群聊触发规则：
 
-- 部署项目推荐使用Windows服务器，[雨云优惠通道注册送首月五折券](https://www.rainyun.com/MzE0MTU=_) 
-- 获取 DeepSeek API Key，[获取 API Key（15元免费额度）](https://cloud.siliconflow.cn/i/aQXU6eC5)
+- `@机器人昵称 你好`
+- `机器人昵称 你好`
 
----
+机器人会直接回复内容，不自动 `@触发者`。
 
-### 3. 如何使用
+## 情绪 GIF 表情
 
-- **使用微信小号登录微信电脑版**
+默认目录：
 
-- **项目运行后，控制台提示**
+```text
+data/avatars/MONO/emojis/
+├─ happy/
+├─ sad/
+├─ angry/
+└─ neutral/
+```
 
-  ```bash
-  初始化成功，获取到已登录窗口：<您的微信昵称>
-  开始运行BOT...
-  ```
+情绪关键词在 `src/handlers/emoji.py` 的 `emotion_map` 中配置。可以把自己的 `.gif`、`.png`、`.jpg` 或 `.jpeg` 文件放入对应目录；不要提交来源和许可不明确的表情包。
 
-  即可开始监听并调用模型自动回复消息。
+仓库内置的 6 个动画猫咪 GIF 来自 Google **Noto Emoji Animation**，使用 CC BY 4.0 许可。详细署名见 `data/avatars/MONO/emojis/ATTRIBUTION.md`。
 
-## 声明
+## 隐私与安全
 
-- 本项目仅用于交流学习，LLM发言不代表作者本人立场。prompt所模仿角色版权归属原作者。任何未经许可进行的限制级行为均由使用者个人承担。
+公开仓库只提供空白配置和通用 `avatar.md` 示例。以下内容不应提交：
 
-## 📜 许可证
+- `src/config/config.json`
+- API Key、Token、Cookie、GitHub 凭据
+- 微信昵称、群名、联系人列表、微信号
+- 私人角色关系、真实姓名或聊天记录
+- `logs/`、`data/wechat_poll_state.json`、截图和运行时缓存
 
-本项目基于 **GPL v3 许可证**，请遵守开源协议。
-**原项目：[KouriChat/KouriChat](https://github.com/KouriChat/KouriChat)**
-如果本项目对你有所帮助，欢迎 Star⭐ 支持！
+如果曾经把密钥提交到 Git 历史中，仅删除文件并不足够；应立即撤销旧密钥，并按需要清理 Git 历史。
 
-## 🙌 致谢
+## 测试
 
-感谢 [KouriChat](https://github.com/KouriChat/) 提供原始项目，本项目在其基础上进行了功能增强与优化。
-如果你有任何问题或建议，欢迎提交 Issue 或 Pull Request！
+```powershell
+python -m unittest discover -s tests -v
+python test.py
+python -m compileall -q src tests run.py run_config_web.py test.py
+```
 
-## **免责声明【必读】**
+测试覆盖微信消息去重、未读驱动轮询、群聊回复不自动 @、AI 后端切换、配置保存和微信兼容层。
 
-- 本项目仅供学习和技术研究使用，不得用于任何商业或非法行为，否则后果自负。
-- 本项目的作者不对本工具的安全性、完整性、可靠性、有效性、正确性或适用性做任何明示或暗示的保证，也不对本工具的使用或滥用造成的任何直接或间接的损失、责任、索赔、要求或诉讼承担任何责任。
-- 本项目的作者保留随时修改、更新、删除或终止本工具的权利，无需事先通知或承担任何义务。
-- 本项目的使用者应遵守相关法律法规，尊重微信的版权和隐私，不得侵犯微信或其他第三方的合法权益，不得从事任何违法或不道德的行为。
-- 本项目的使用者在下载、安装、运行或使用本工具时，即表示已阅读并同意本免责声明。如有异议，请立即停止使用本工具，并删除所有相关文件。
-- 本项目提供的微信接入方式均来自其他开源项目，仅供学习和技术研究使用。
+## 已知限制
 
+- 免费版依赖微信前台 UI，微信不能处于完全不可操作状态。
+- 新消息到达、回复或发送文件时仍可能切换当前聊天并短暂影响焦点。
+- 会话预览完全不变化且微信不提供未读标记的极端情况下，可能延迟发现消息。
+- 微信升级后如果 UI Automation 控件结构变化，可能需要调整兼容层。
+- 请控制监听对象数量和发送频率，不要用于批量营销、骚扰或规避平台规则。
+
+## 原项目与许可证
+
+本项目基于以下 GPLv3 项目继续维护：
+
+- [KouriChat/KouriChat](https://github.com/KouriChat/KouriChat)
+- [umaru-233/My-Dream-Moments](https://github.com/umaru-233/My-Dream-Moments)
+
+原作者和贡献者的版权归其各自所有。本仓库继续按 [GNU General Public License v3.0](LICENSE) 分发，不提供任何担保。第三方素材可能使用不同许可证，详见对应目录中的署名文件。

@@ -12,7 +12,12 @@ import sys
 import shutil
 import logging
 import unittest
+import tempfile
 from datetime import datetime
+
+if sys.platform.startswith("win") and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 # 设置日志
 logging.basicConfig(
@@ -30,6 +35,7 @@ class SystemTests(unittest.TestCase):
         self.data_dir = os.path.join(self.root_dir, 'data')
         self.logs_dir = os.path.join(self.root_dir, 'logs')
         self.temp_dir = os.path.join(self.root_dir, 'temp')
+        os.makedirs(self.logs_dir, exist_ok=True)
         
     def test_directory_structure(self):
         """测试目录结构"""
@@ -67,66 +73,43 @@ class SystemTests(unittest.TestCase):
             )
             
     def test_cleanup_wxauto(self):
-        """测试wxauto文件清理"""
-        wxauto_dir = os.path.join(os.getcwd(), "wxauto文件")
-        
-        # 创建测试文件
-        if not os.path.exists(wxauto_dir):
+        """Test runtime cleanup in a temporary directory only."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wxauto_dir = os.path.join(temp_dir, "wxauto-runtime")
             os.makedirs(wxauto_dir)
-        
-        test_file = os.path.join(wxauto_dir, "test.txt")
-        with open(test_file, 'w') as f:
-            f.write("test")
-            
-        # 执行清理
-        cleanup_wxauto_files()
-        
-        # 验证清理结果
-        self.assertFalse(
-            os.path.exists(test_file),
-            "wxauto测试文件未被清理"
-        )
+            test_file = os.path.join(wxauto_dir, "test.txt")
+            with open(test_file, "w", encoding="utf-8") as file:
+                file.write("test")
 
-def cleanup_wxauto_files():
-    """
-    清理当前目录下的wxauto文件夹中的文件和子文件夹
-    """
-    try:
-        # 当前目录下的wxauto文件夹路径
-        wxauto_dir = os.path.join(os.getcwd(), "wxauto文件")
-        print(f"正在检查目录: {wxauto_dir}")
-        if not os.path.exists(wxauto_dir):
-            print("wxauto文件夹不存在，无需清理")
-            return
-            
-        files = os.listdir(wxauto_dir)
-        if not files:
-            print("wxauto文件夹为空，无需清理")
-            return
-            
-        deleted_count = 0
-        for file in files:
-            try:
-                file_path = os.path.join(wxauto_dir, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-                    # print(f"已删除文件: {file_path}")
-                    deleted_count += 1
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-                    # print(f"已删除文件夹: {file_path}")
-                    deleted_count += 1
-            except Exception as e:
-                # print(f"删除失败 {file_path}: {str(e)}")
+            deleted_count = cleanup_wxauto_files(wxauto_dir)
+
+            self.assertEqual(deleted_count, 1)
+            self.assertFalse(os.path.exists(test_file))
+
+def cleanup_wxauto_files(wxauto_dir):
+    """Clean a supplied wxauto runtime directory and return the item count."""
+    if not os.path.isdir(wxauto_dir):
+        return 0
+
+    deleted_count = 0
+    for name in os.listdir(wxauto_dir):
+        path = os.path.join(wxauto_dir, name)
+        try:
+            if os.path.isfile(path) or os.path.islink(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
                 continue
-                
-        print(f"清理完成，共删除 {deleted_count} 个文件/文件夹")
-    except Exception as e:
-        print(f"清理wxauto文件夹时发生错误: {str(e)}")
+            deleted_count += 1
+        except OSError as exc:
+            logger.warning("Unable to clean test runtime file: %s", exc)
+    return deleted_count
+
 
 def check_python_version():
     """检查Python版本"""
-    required_version = (3, 8)
+    required_version = (3, 9)
     current_version = sys.version_info[:2]
     
     if current_version < required_version:
@@ -142,7 +125,7 @@ def check_dependencies():
         import colorama
         import openai
         import sqlalchemy
-        import wxauto
+        import wxauto4
         import pyautogui
         logger.info("所有依赖项检查通过")
         return True
@@ -174,7 +157,6 @@ def main():
         if run_tests():
             logger.info("所有测试通过")
             # 清理临时文件
-            cleanup_wxauto_files()
         else:
             logger.error("测试未通过")
             

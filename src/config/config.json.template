@@ -4,17 +4,34 @@
             "title": "用户设置",
             "settings": {
                 "listen_list": {
-                    "value": [
-                        ""
-                    ],
+                    "value": [],
                     "type": "array",
                     "description": "要监听的用户列表（请使用微信昵称，不要使用备注名）"
+                }
+            }
+        },
+        "wechat_settings": {
+            "title": "微信4免费轮询设置",
+            "settings": {
+                "poll_interval": {
+                    "value": 2.0,
+                    "type": "number",
+                    "description": "每轮轮询之间的等待秒数"
                 }
             }
         },
         "llm_settings": {
             "title": "大语言模型配置",
             "settings": {
+                "provider": {
+                    "value": "deepseek",
+                    "type": "string",
+                    "description": "聊天 AI 提供方",
+                    "options": [
+                        "deepseek",
+                        "dify"
+                    ]
+                },
                 "api_key": {
                     "value": "",
                     "type": "string",
@@ -22,12 +39,12 @@
                     "is_secret": true
                 },
                 "base_url": {
-                    "value": "https://api.siliconflow.cn/v1/",
+                    "value": "https://api.deepseek.com/v1/",
                     "type": "string",
                     "description": "DeepSeek API基础URL"
                 },
                 "model": {
-                    "value": "Pro/deepseek-ai/DeepSeek-V3",
+                    "value": "deepseek-chat",
                     "type": "string",
                     "description": "使用的AI模型名称",
                     "options": [
@@ -42,11 +59,22 @@
                     "description": "回复最大token数量"
                 },
                 "temperature": {
-                    "value": 1.5,
+                    "value": 1.0,
                     "type": "number",
                     "description": "AI回复的温度值",
                     "min": 0.0,
                     "max": 1.7
+                },
+                "dify_api_key": {
+                    "value": "",
+                    "type": "string",
+                    "description": "Dify API 密钥",
+                    "is_secret": true
+                },
+                "dify_base_url": {
+                    "value": "https://api.dify.ai/v1/",
+                    "type": "string",
+                    "description": "Dify API 基础 URL"
                 }
             }
         },
@@ -152,11 +180,11 @@
             "settings": {
                 "admin_password": {
                     "value": "",
-                    "type": "string", 
+                    "type": "string",
                     "description": "管理员密码",
                     "is_secret": true
                 }
             }
         }
     }
-} 
+}

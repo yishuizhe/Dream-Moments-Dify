@@ -12,37 +12,76 @@ import threading
 import time
 from datetime import datetime
 from typing import Dict, List, Optional
-from openai import OpenAI
-from wxauto import WeChat
 from services.database import Session, ChatMessage
 import random
 import os
 from services.ai.dify import DifyAI
+from services.ai.deepseek import DeepSeekAI
 
 logger = logging.getLogger(__name__)
 
 class MessageHandler:
-    def __init__(self, root_dir, api_key, base_url, max_groups, robot_name, prompt_content, image_handler, emoji_handler, voice_handler,dify_api_key,dify_base_url):
+    def __init__(
+        self,
+        root_dir,
+        api_key,
+        base_url,
+        max_groups,
+        robot_name,
+        prompt_content,
+        image_handler,
+        emoji_handler,
+        voice_handler,
+        dify_api_key,
+        dify_base_url,
+        wechat,
+        ai_provider="deepseek",
+        model="deepseek-chat",
+        max_tokens=2000,
+        temperature=1.0,
+    ):
         self.root_dir = root_dir
         self.api_key = api_key
         self.max_groups = max_groups
         self.robot_name = robot_name
         self.prompt_content = prompt_content
-        
-        # 使用 difyAI 替换直接的 OpenAI 客户端
-        self.dify = DifyAI(
-            dify_api_key=dify_api_key,
-            dify_base_url=dify_base_url,
-            max_groups=max_groups
-        )
-        
+        self.ai_provider = str(ai_provider or "deepseek").strip().lower()
+
+        if self.ai_provider == "dify":
+            if not str(dify_api_key or "").strip():
+                raise ValueError("AI_PROVIDER=dify 时必须配置 DIFY_API_KEY")
+            self.ai = DifyAI(
+                dify_api_key=dify_api_key,
+                dify_base_url=dify_base_url,
+                max_groups=max_groups,
+            )
+        elif self.ai_provider == "deepseek":
+            if not str(api_key or "").strip():
+                raise ValueError("AI_PROVIDER=deepseek 时必须配置 DEEPSEEK_API_KEY")
+            if not str(base_url or "").strip():
+                raise ValueError("AI_PROVIDER=deepseek 时必须配置 DEEPSEEK_BASE_URL")
+            self.ai = DeepSeekAI(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                max_token=int(max_tokens),
+                temperature=float(temperature),
+                max_groups=max_groups,
+            )
+        else:
+            raise ValueError(
+                f"不支持的 AI_PROVIDER: {self.ai_provider}; 可选 deepseek 或 dify"
+            )
+
+        logger.info("聊天 AI 提供方: %s", self.ai_provider)
+
         # 消息队列相关
         self.user_queues = {}
         self.queue_lock = threading.Lock()
         self.chat_contexts = {}
-        
-        # 微信实例
-        self.wx = WeChat()
+
+        # Shared adapter serializes polling and send operations.
+        self.wx = wechat
 
         # 添加 handlers
         self.image_handler = image_handler
@@ -63,11 +102,11 @@ class MessageHandler:
             session.commit()
             session.close()
         except Exception as e:
-            print(f"保存消息失败: {str(e)}")
+            logger.error(f"保存消息失败: {str(e)}")
 
     def get_api_response(self, message: str, user_id: str) -> str:
-        """获取 API 回复"""
-        return self.dify.get_response(message, user_id, self.prompt_content)
+        """从当前配置的 AI 提供方获取回复。"""
+        return self.ai.get_response(message, user_id, self.prompt_content)
 
     def process_messages(self, chat_id: str):
         """处理消息队列中的消息"""
@@ -78,36 +117,30 @@ class MessageHandler:
             messages = user_data['messages']
             sender_name = user_data['sender_name']
             username = user_data['username']
-            is_group = user_data.get('is_group', False)
 
         messages = messages[-5:]
         merged_message = ' \\ '.join(messages)
-        print("\n" + "="*50)
-        print(f"收到消息 - 发送者: {sender_name}")
-        print(f"消息内容: {merged_message}")
-        print("-"*50)
+        logger.info("Processing queued message from %s", sender_name)
 
         try:
             # 检查消息是否包含图片识别结果
             is_image_recognition = any("发送了图片：" in msg or "发送了表情包：" in msg for msg in messages)
             if is_image_recognition:
-                print("消息类型: 图片识别结果")
-            
+                logger.info("Detected image-recognition result")
+
             # 检查是否为语音请求
             if self.voice_handler.is_voice_request(merged_message):
                 logger.info("检测到语音请求")
                 reply = self.get_api_response(merged_message, chat_id)
                 if "</think>" in reply:
                     reply = reply.split("</think>", 1)[1].strip()
-                
+
                 voice_path = self.voice_handler.generate_voice(reply)
                 if voice_path:
                     try:
                         self.wx.SendFiles(filepath=voice_path, who=chat_id)
                     except Exception as e:
                         logger.error(f"发送语音失败: {str(e)}")
-                        if is_group:
-                            reply = f"@{sender_name} {reply}"
                         self.wx.SendMsg(msg=reply, who=chat_id)
                     finally:
                         try:
@@ -115,12 +148,10 @@ class MessageHandler:
                         except Exception as e:
                             logger.error(f"删除临时语音文件失败: {str(e)}")
                 else:
-                    if is_group:
-                        reply = f"@{sender_name} {reply}"
                     self.wx.SendMsg(msg=reply, who=chat_id)
-                
+
                 # 异步保存消息记录
-                threading.Thread(target=self.save_message, 
+                threading.Thread(target=self.save_message,
                             args=(username, sender_name, merged_message, reply)).start()
                 return
 
@@ -141,9 +172,7 @@ class MessageHandler:
                                 os.remove(image_path)
                         except Exception as e:
                             logger.error(f"删除临时图片失败: {str(e)}")
-                    
-                    if is_group:
-                        reply = f"@{sender_name} {reply}"
+
                     self.wx.SendMsg(msg=reply, who=chat_id)
                     return
 
@@ -164,9 +193,7 @@ class MessageHandler:
                                 os.remove(image_path)
                         except Exception as e:
                             logger.error(f"删除临时图片失败: {str(e)}")
-                    
-                    if is_group:
-                        reply = f"@{sender_name} {reply}"
+
                     self.wx.SendMsg(msg=reply, who=chat_id)
                     return
 
@@ -175,17 +202,8 @@ class MessageHandler:
                 logger.info("处理普通文本回复")
                 reply = self.get_api_response(merged_message, chat_id)
                 if "</think>" in reply:
-                    think_content, reply = reply.split("</think>", 1)
-                    print("\n思考过程:")
-                    print(think_content.strip())
-                    print("\nAI回复:")
-                    print(reply.strip())
-                else:
-                    print("\nAI回复:")
-                    print(reply)
-                
-                if is_group:
-                    reply = f"@{sender_name} {reply}"
+                    reply = reply.split("</think>", 1)[1].strip()
+                logger.info("AI reply generated for chat %s", chat_id)
 
                 # 发送文本回复
                 if '\\' in reply:
@@ -197,7 +215,6 @@ class MessageHandler:
                     self.wx.SendMsg(msg=reply, who=chat_id)
 
                 # 检查回复中是否包含情感关键词并发送表情包
-                print("\n检查情感关键词...")
                 logger.info("开始检查AI回复的情感关键词")
                 emotion_detected = False
 
@@ -205,20 +222,18 @@ class MessageHandler:
                     if not hasattr(self.emoji_handler, 'emotion_map'):
                         logger.error("emoji_handler 缺少 emotion_map 属性")
                         return
-                        
+
                     for emotion, keywords in self.emoji_handler.emotion_map.items():
                         if not keywords:  # 跳过空的关键词列表（如 neutral）
                             continue
-                            
+
                         if any(keyword in reply for keyword in keywords):
                             emotion_detected = True
-                            print(f"检测到情感: {emotion}")
                             logger.info(f"在回复中检测到情感: {emotion}")
-                            
+
                             emoji_path = self.emoji_handler.get_emotion_emoji(reply)
                             if emoji_path:
                                 try:
-                                    print(f"发送情感表情包: {emoji_path}")
                                     self.wx.SendFiles(filepath=emoji_path, who=chat_id)
                                     logger.info(f"已发送情感表情包: {emoji_path}")
                                 except Exception as e:
@@ -228,25 +243,20 @@ class MessageHandler:
                             break
 
                     if not emotion_detected:
-                        print("未检测到明显情感")
                         logger.info("未在回复中检测到明显情感")
-                        
+
                 except Exception as e:
                     logger.error(f"情感检测过程发生错误: {str(e)}")
-                    print(f"情感检测失败: {str(e)}")
 
                 # 异步保存消息记录
-                threading.Thread(target=self.save_message, 
+                threading.Thread(target=self.save_message,
                             args=(username, sender_name, merged_message, reply)).start()
 
-            print("="*50 + "\n")
         except Exception as e:
             logger.error(f"处理消息失败: {str(e)}", exc_info=True)
-            print("\n处理消息时出现错误:")
-            print(f"错误信息: {str(e)}")
-            print("="*50 + "\n")
 
-    def add_to_queue(self, chat_id: str, content: str, sender_name: str, 
+
+    def add_to_queue(self, chat_id: str, content: str, sender_name: str,
                     username: str, is_group: bool = False):
         """添加消息到队列"""
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -266,4 +276,4 @@ class MessageHandler:
                 self.user_queues[chat_id]['timer'].cancel()
                 self.user_queues[chat_id]['messages'].append(time_aware_content)
                 self.user_queues[chat_id]['timer'] = threading.Timer(5.0, self.process_messages, args=[chat_id])
-                self.user_queues[chat_id]['timer'].start() 
+                self.user_queues[chat_id]['timer'].start()

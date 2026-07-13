@@ -40,7 +40,7 @@ class LoggerConfig:
 
         # 创建控制台处理器
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(level)
+        console_handler.setLevel(logging.WARNING)
         console_formatter = logging.Formatter(
             '%(asctime)s - %(levelname)s - %(message)s'
         )
@@ -60,6 +60,7 @@ class LoggerConfig:
         )
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
+        logger.propagate = False
 
         return logger
 

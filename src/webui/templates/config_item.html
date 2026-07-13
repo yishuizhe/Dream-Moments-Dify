@@ -52,7 +52,12 @@
     </span>
     {{ config.description }}
 </label>
-{% if key == 'LISTEN_LIST' %}
+{% if key == 'AI_PROVIDER' %}
+    <select class="form-select" id="{{ key }}" name="{{ key }}">
+        <option value="deepseek" {% if config.value == 'deepseek' %}selected{% endif %}>DeepSeek / OpenAI 兼容 API（直接调用）</option>
+        <option value="dify" {% if config.value == 'dify' %}selected{% endif %}>Dify Chat API</option>
+    </select>
+{% elif key == 'LISTEN_LIST' %}
     <div class="mb-2">
         <div class="input-group mb-2">
             <input type="text" class="form-control" 

@@ -55,11 +55,11 @@ dictConfig({
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'default',
-            'level': 'DEBUG'
+            'level': 'WARNING'
         }
     },
     'root': {
-        'level': 'DEBUG',
+        'level': 'WARNING',
         'handlers': ['console']
     },
     'loggers': {
@@ -128,6 +128,7 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
         "时间配置": {},
         "语音配置": {},
         "Prompt配置": {},
+        "微信轮询配置": {},
     }
 
     # 基础配置
@@ -137,35 +138,53 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
                 "value": config.user.listen_list,
                 "description": "用户列表(请配置要和bot说话的账号的昵称或者群名，不要写备注！)",
             },
+            "AI_PROVIDER": {
+                "value": config.llm.provider,
+                "description": "聊天 AI 提供方",
+                "options": ["deepseek", "dify"],
+            },
             "DEEPSEEK_BASE_URL": {
                 "value": config.llm.base_url,
-                "description": "API注册地址",
+                "description": "DeepSeek/OpenAI 兼容 API 地址",
             },
             "DEEPSEEK_API_KEY": {
                 "value": config.llm.api_key,
-                "description": "API密钥",
+                "description": "DeepSeek/OpenAI 兼容 API 密钥",
             },
-             "DIFY_BASE_URL": {
+            "MODEL": {
+                "value": config.llm.model,
+                "description": "直接 API 模型名称",
+            },
+            "MAX_TOKEN": {
+                "value": config.llm.max_tokens,
+                "description": "回复最大 token 数",
+                "type": "number",
+            },
+            "TEMPERATURE": {
+                "value": float(config.llm.temperature),
+                "type": "number",
+                "description": "温度参数",
+                "min": 0.0,
+                "max": 2.0,
+            },
+            "DIFY_BASE_URL": {
                 "value": config.llm.dify_base_url,
-                "description": "DIFY注册地址",
+                "description": "Dify API 地址",
             },
             "DIFY_API_KEY": {
                 "value": config.llm.dify_api_key,
-                "description": "DIFY API密钥",
+                "description": "Dify API 密钥",
             },
-            # "MODEL": {"value": config.llm.model, "description": "AI模型选择"},
-            # "MAX_TOKEN": {
-            #     "value": config.llm.max_tokens,
-            #     "description": "回复最大token数",
-            #     "type": "number",
-            # },
-            # "TEMPERATURE": {
-            #     "value": float(config.llm.temperature),  # 确保是浮点数
-            #     "type": "number",
-            #     "description": "温度参数",
-            #     "min": 0.0,
-            #     "max": 1.7,
-            # },
+        }
+    )
+
+    config_groups["微信轮询配置"].update(
+        {
+            "WECHAT_POLL_INTERVAL": {
+                "value": config.wechat.poll_interval,
+                "type": "number",
+                "description": "检查新消息的间隔（秒）",
+            },
         }
     )
 
@@ -266,6 +285,7 @@ def save_config(new_config: Dict[str, Any]) -> bool:
     try:
         from src.config import (
             UserSettings,
+            WeChatSettings,
             LLMSettings,
             ImageRecognitionSettings,
             ImageGenerationSettings,
@@ -278,24 +298,37 @@ def save_config(new_config: Dict[str, Any]) -> bool:
             config
         )
 
-        # 添加调试日志，查看接收到的所有参数
-        logger.debug("接收到的所有配置参数:")
-        for key, value in new_config.items():
-            logger.debug(f"{key}: {value} (类型: {type(value)})")
-
-        # 特别处理温度参数
-        # temperature = float(new_config.get("TEMPERATURE", 1.1))
-        # logger.debug(f"处理后的温度参数: {temperature} (类型: {type(temperature)})")
-
         # 构建所有新的配置对象
+        def parse_bool(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+        wechat_settings = WeChatSettings(
+            poll_interval=float(new_config.get("WECHAT_POLL_INTERVAL", config.wechat.poll_interval)),
+            history_size=int(new_config.get("WECHAT_HISTORY_SIZE", config.wechat.history_size)),
+            state_file=str(
+                new_config.get("WECHAT_STATE_FILE", config.wechat.state_file)
+            ),
+            process_existing_on_start=parse_bool(
+                new_config.get("WECHAT_PROCESS_EXISTING", config.wechat.process_existing_on_start)
+            ),
+            exact_match=parse_bool(new_config.get("WECHAT_EXACT_MATCH", config.wechat.exact_match)),
+        )
+
+        provider = str(new_config.get("AI_PROVIDER", "deepseek")).strip().lower()
+        if provider not in {"deepseek", "dify"}:
+            provider = "deepseek"
         llm_settings = LLMSettings(
             api_key=new_config.get("DEEPSEEK_API_KEY", ""),
             base_url=new_config.get("DEEPSEEK_BASE_URL", ""),
-            dify_api_key=new_config.get("DIFY_API_KEY",""),
-            dify_base_url=new_config.get("DIFY_BASE_URL",""),
-            # model=new_config.get("MODEL", ""),
-            # max_tokens=int(new_config.get("MAX_TOKEN", 2000)),
-            # temperature=temperature  # 使用处理后的温度值
+            dify_api_key=new_config.get("DIFY_API_KEY", ""),
+            dify_base_url=new_config.get("DIFY_BASE_URL", ""),
+            provider=provider,
+            model=str(new_config.get("MODEL", "deepseek-chat")).strip()
+            or "deepseek-chat",
+            max_tokens=int(new_config.get("MAX_TOKEN", 2000)),
+            temperature=float(new_config.get("TEMPERATURE", 1.0)),
         )
 
         media_settings = MediaSettings(
@@ -343,9 +376,45 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                         }
                     },
                 },
+                "wechat_settings": {
+                    "title": "微信4免费轮询设置",
+                    "settings": {
+                        "poll_interval": {
+                            "value": wechat_settings.poll_interval,
+                            "type": "number",
+                            "description": "每轮轮询之间的等待秒数",
+                        },
+                        "history_size": {
+                            "value": wechat_settings.history_size,
+                            "type": "number",
+                            "description": "每个会话用于快照去重的最大消息数",
+                        },
+                        "state_file": {
+                            "value": wechat_settings.state_file,
+                            "type": "string",
+                            "description": "轮询去重状态文件",
+                        },
+                        "process_existing_on_start": {
+                            "value": wechat_settings.process_existing_on_start,
+                            "type": "boolean",
+                            "description": "首次启动时是否处理当前窗口中已有的历史消息",
+                        },
+                        "exact_match": {
+                            "value": wechat_settings.exact_match,
+                            "type": "boolean",
+                            "description": "打开会话时是否精确匹配联系人或群名",
+                        },
+                    },
+                },
                 "llm_settings": {
                     "title": "大语言模型配置",
                     "settings": {
+                        "provider": {
+                            "value": llm_settings.provider,
+                            "type": "string",
+                            "description": "聊天 AI 提供方",
+                            "options": ["deepseek", "dify"],
+                        },
                         "api_key": {
                             "value": llm_settings.api_key,
                             "type": "string",
@@ -367,29 +436,31 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                             "value": llm_settings.dify_base_url,
                             "type": "string",
                             "description": "DIFY API基础URL",
-                        }
-                        # "model": {
-                        #     "value": llm_settings.model,
-                        #     "type": "string",
-                        #     "description": "使用的AI模型名称",
-                        #     "options": [
-                        #         "deepseek-ai/DeepSeek-V3",
-                        #         "Pro/deepseek-ai/DeepSeek-V3",
-                        #         "Pro/deepseek-ai/DeepSeek-R1",
-                        #     ],
-                        # },
-                        # "max_tokens": {
-                        #     "value": llm_settings.max_tokens,
-                        #     "type": "number",
-                        #     "description": "回复最大token数量",
-                        # },
-                        # "temperature": {
-                        #     "value": temperature,
-                        #     "type": "number",
-                        #     "description": "AI回复的温度值",
-                        #     "min": 0.0,
-                        #     "max": 1.7
-                        # },
+                        },
+                        "model": {
+                            "value": llm_settings.model,
+                            "type": "string",
+                            "description": "使用的AI模型名称",
+                            "options": [
+                                "deepseek-ai/DeepSeek-V3",
+                                "Pro/deepseek-ai/DeepSeek-V3",
+                                "Pro/deepseek-ai/DeepSeek-R1",
+                                "deepseek-chat",
+                                "deepseek-reasoner",
+                            ],
+                        },
+                        "max_tokens": {
+                            "value": llm_settings.max_tokens,
+                            "type": "number",
+                            "description": "回复最大token数量",
+                        },
+                        "temperature": {
+                            "value": llm_settings.temperature,
+                            "type": "number",
+                            "description": "AI回复的温度值",
+                            "min": 0.0,
+                            "max": 2.0,
+                        },
                     },
                 },
                 "media_settings": {
@@ -522,7 +593,6 @@ def save():
     """保存配置"""
     try:
         new_config = request.json
-        logger.debug(f"接收到的配置数据: {new_config}")
         
         if save_config(new_config):
             return jsonify({
@@ -1276,10 +1346,8 @@ def check_dependencies():
                 
                 # 检查缺失的依赖
                 missing_deps = [
-                    pkg for pkg in required_packages 
-                    if pkg not in installed_packages and not (
-                        pkg == 'wxauto' and 'wxauto-py' in installed_packages
-                    )
+                    pkg for pkg in required_packages
+                    if pkg not in installed_packages
                 ]
                 
                 logger.debug(f"缺失的包: {missing_deps}")

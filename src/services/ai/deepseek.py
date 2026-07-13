@@ -98,104 +98,46 @@ class DeepSeekAI:
             return "响应处理异常，请重新尝试"
 
     def _validate_response(self, response: dict) -> bool:
+        """校验 OpenAI-compatible 聊天响应中的必要字段。
+
+        不同服务商对 ``model``、``usage``、``finish_reason`` 等可选字段的
+        返回格式并不完全一致。这里仅拒绝无法提取助手文本的响应，避免把
+        SiliconFlow、DeepSeek 官方 API 或其他兼容服务的有效结果误判为异常。
         """
-        API响应校验增强版
-        验证点涵盖：
-        1. 基础字段存在性
-        2. 字段类型校验
-        3. 关键内容有效性
-        4. 数据一致性校验
-        """
-        # DEBUG模式时可打印完整响应结构
-        logger.debug("API响应调试信息：\n%s", json.dumps(response, indent=2, ensure_ascii=False))
-
-        # —— 校验层级1：基础结构 ——
-        required_root_keys = {"id", "object", "created", "model", "choices", "usage"}
-        if missing := required_root_keys - response.keys():
-            logger.error("根层级缺少必需字段：%s", missing)
+        if not isinstance(response, dict):
+            logger.error("API响应不是字典类型: %s", type(response).__name__)
             return False
 
-        # —— 校验层级2：字段类型校验 ——
-        type_checks = [
-            ("id", str, "字段应为字符串"),
-            ("object", str, "字段应为字符串"),
-            ("created", int, "字段应为时间戳整数"),
-            ("model", str, "字段应为模型名称字符串"),
-            ("choices", list, "字段应为列表类型"),
-            ("usage", dict, "字段应为使用量字典")
-        ]
+        logger.debug(
+            "API响应调试信息：\n%s",
+            json.dumps(response, indent=2, ensure_ascii=False, default=str),
+        )
 
-        for field, expected_type, error_msg in type_checks:
-            if not isinstance(response.get(field), expected_type):
-                logger.error("字段[%s]类型错误：%s", field, error_msg)
-                return False
-
-        # —— 校验层级3：字段内容有效性 ——
-        # 检查模型名称格式
-        if not re.match(r'^[a-zA-Z/-]*deepseek', response["model"], re.IGNORECASE):
-            logger.error("模型名称格式异常：%s", response["model"])
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            logger.error("API响应缺少非空 choices 数组")
             return False
 
-        # 检查时间戳有效性（允许过去30年到未来5分钟）
-        current_timestamp = int(time.time())
-        if not (current_timestamp - 946080000 < response["created"] < current_timestamp + 300):
-            logger.error("无效时间戳：%s", response["created"])
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            logger.error("API响应首个 choice 不是字典类型")
             return False
 
-        # —— 校验层级4：choices数组结构 ——
-        if len(response["choices"]) == 0:
-            logger.error("空响应choices数组")
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            logger.error("API响应首个 choice 缺少 message 对象")
             return False
 
-        for index, choice in enumerate(response["choices"]):
-            if not isinstance(choice, dict):
-                logger.error("第%d个choice类型错误", index)
-                return False
-
-            if missing := {"index", "message", "finish_reason"} - choice.keys():
-                logger.error("choice%d缺少字段：%s", index, missing)
-                return False
-
-            # 校验message结构
-            message = choice["message"]
-            if missing := {"role", "content"} - message.keys():
-                logger.error("message结构异常：缺少%s", missing)
-                return False
-
-            if message["role"] != "assistant":
-                logger.error("非预期角色类型：%s", message["role"])
-                return False
-
-            if not isinstance(message["content"], str) or len(message["content"].strip()) == 0:
-                logger.error("无效消息内容：%s", message["content"])
-                return False
-
-            # 校验finish_reason
-            if choice["finish_reason"] not in ("stop", "length", "content_filter", None):
-                logger.error("异常对话终止原因：%s", choice["finish_reason"])
-                return False
-
-        # —— 校验层级5：使用量统计 ——
-        usage = response["usage"]
-        usage_checks = [
-            ("prompt_tokens", int, "应为非负整数"),
-            ("completion_tokens", int, "应为非负整数"),
-            ("total_tokens", int, "应为非负整数")
-        ]
-
-        for field, expected_type, error_msg in usage_checks:
-            if not isinstance(usage.get(field), expected_type) or usage[field] < 0:
-                logger.error("使用量字段[%s]无效：%s", field, error_msg)
-                return False
-
-        # 校验token总数一致性
-        if usage["total_tokens"] != (usage["prompt_tokens"] + usage["completion_tokens"]):
-            logger.error("Token总数不一致：prompt(%d) + completion(%d) ≠ total(%d)",
-                         usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"])
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            logger.error("API响应缺少有效的助手文本内容")
             return False
+
+        usage = response.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            logger.warning("忽略格式异常的 usage 字段: %r", usage)
 
         return True
-
     def get_response(self, message: str, user_id: str, system_prompt: str) -> str:
         """
         完整请求处理流程

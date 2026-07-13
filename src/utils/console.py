@@ -63,31 +63,14 @@ def print_status(message: str, status: str = "info", icon: str = ""):
         print(f"{message}")
 
 def print_banner():
-    """
-    打印程序启动横幅
-    """
+    """Print one concise startup banner; full notices remain in README/LICENSE."""
     try:
         banner = f"""
-{Fore.CYAN}
-╔══════════════════════════════════════════════╗
-║              KouriChat - AI Chat             ║
-║          Created by KouriChat Team           ║
-║           Created with ❤️  by umaru          ║
-║     https://github.com/KouriChat/KouriChat   ║
-╚══════════════════════════════════════════════╝
-
-KouriChat - AI Chat  Copyright (C) 2025,github.com/umaru-233
-This program comes with ABSOLUTELY NO WARRANTY; for details please read
-https://www.gnu.org/licenses/gpl-3.0.en.html.
-该程序是基于GPLv3许可证分发的，因此该程序不提供任何保证；有关更多信息，请参阅GPLv3许可证。
-This is free software, and you are welcome to redistribute it
-under certain conditions; please read
-https://www.gnu.org/licenses/gpl-3.0.en.html.
-这是免费软件，欢迎您二次分发它，在某些情况下，请参阅GPLv3许可证。
-It's freeware, and if you bought it for money, you've been scammed!
-这是免费软件，如果你是花钱购买的，说明你被骗了！
-{Style.RESET_ALL}"""
+{Fore.CYAN}==================================================
+ Dream-Moments-Dify
+ Based on My-Dream-Moments / KouriChat
+ GPLv3 | https://github.com/KouriChat/KouriChat
+=================================================={Style.RESET_ALL}"""
         print(banner)
     except Exception:
-        # 如果出现编码错误，使用简单版本
-        print("\nKouriChat - AI Chat\n") 
+        print("\nDream-Moments-Dify (GPLv3, based on KouriChat)\n")

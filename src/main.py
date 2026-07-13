@@ -9,7 +9,7 @@ import os
 import shutil
 from services.database import Session, ChatMessage
 from config import config
-from wxauto import WeChat
+from wechat.adapter import WxAuto4PollingAdapter
 import re
 import pyautogui
 from handlers.emoji import EmojiHandler
@@ -17,11 +17,10 @@ from handlers.image import ImageHandler
 from handlers.message import MessageHandler
 from handlers.voice import VoiceHandler
 from services.ai.moonshot import MoonShotAI
-from services.ai.deepseek import DeepSeekAI
-from services.ai.dify import DifyAI
 from utils.cleanup import cleanup_pycache, CleanupUtils
 from utils.logger import LoggerConfig
-from colorama import init, Fore, Style
+from colorama import init
+from utils.console import print_status, print_banner
 
 # 获取项目根目录
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,15 +36,15 @@ chat_contexts = {}  # 存储上下文
 init()
 
 class ChatBot:
-    def __init__(self, message_handler, moonshot_ai):
+    def __init__(self, message_handler, moonshot_ai, wechat):
         self.message_handler = message_handler
         self.moonshot_ai = moonshot_ai
         self.user_queues = {}  # 将user_queues移到类的实例变量
         self.queue_lock = threading.Lock()  # 将queue_lock也移到类的实例变量
         
         # 获取机器人的微信名称
-        self.wx = WeChat()
-        self.robot_name = self.wx.A_MyIcon.Name  # 移除括号，直接访问Name属性
+        self.wx = wechat
+        self.robot_name = self.wx.get_my_name()
         logger.info(f"机器人名称: {self.robot_name}")
 
     def process_user_messages(self, chat_id):
@@ -64,7 +63,6 @@ class ChatBot:
                 is_group = user_data.get('is_group', False)
                 
             logger.info(f"队列信息 - 发送者: {sender_name}, 消息数: {len(messages)}, 是否群聊: {is_group}")
-            logger.info(f"消息内容: {messages}")
 
             # 处理消息
             self.message_handler.add_to_queue(
@@ -85,7 +83,6 @@ class ChatBot:
             content = getattr(msg, 'content', None) or getattr(msg, 'text', None)
 
             logger.info(f"收到消息 - 来源: {chatName}, 发送者: {username}, 是否群聊: {is_group}")
-            logger.info(f"原始消息内容: {content}")
 
             if not content:
                 logger.warning("消息内容为空，跳过处理")
@@ -95,32 +92,32 @@ class ChatBot:
             is_emoji = False
             
             # 处理群聊消息
-            if is_group and self.robot_name:
+            if is_group:
+                # 无法取得机器人昵称时，不能安全判断群聊是否在叫机器人。
+                if not self.robot_name:
+                    logger.warning("未取得机器人昵称，已跳过群聊消息")
+                    return
                 original_content = content
                 # 处理@机器人
                 if f'@{self.robot_name}' in original_content:
                     content = re.sub(rf'@{re.escape(self.robot_name)}\s*', '', content).strip()
-                    logger.info(f"移除@后的消息内容: {content}")
                 # **处理直接提及机器人名字**
                 elif re.search(rf'(^|[\s,，]){re.escape(self.robot_name)}([\s,，]|$)', original_content):
-                    logger.info(f"检测到群聊消息包含机器人名字: {original_content}")
                     content = re.sub(rf'(^|[\s,，]){re.escape(self.robot_name)}([\s,，]|$)', '', original_content).strip()
-                    logger.info(f"移除机器人名字后的消息内容: {content}")
                 else:
                     logger.info("未检测到@机器人，也未单独提及机器人名字，跳过处理")
                     return
             
             # 处理图片消息
             if content.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-                logger.info(f"检测到图片消息: {content}")
                 img_path = content
                 is_emoji = False
                 content = None
 
             # 处理动画表情
-            if "[动画表情]" in content:
+            if content and "[动画表情]" in content:
                 logger.info("检测到动画表情")
-                img_path = emoji_handler.capture_and_save_screenshot(username)
+                img_path = emoji_handler.capture_and_save_screenshot(chatName)
                 logger.info(f"表情截图保存路径: {img_path}")
                 is_emoji = True
                 content = None
@@ -131,13 +128,9 @@ class ChatBot:
                 logger.info(f"图片/表情识别结果: {recognized_text}")
                 content = recognized_text if content is None else f"{content} {recognized_text}"
 
-            if content:
-                logger.info(f"处理文本消息 - 发送者: {username}, 内容: {content}")
-
             sender_name = username
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             time_aware_content = f"[{current_time}] {content}"
-            logger.info(f"格式化后的消息: {time_aware_content}")
 
             # 将消息加入队列
             with self.queue_lock:
@@ -169,7 +162,21 @@ with open(prompt_path, "r", encoding="utf-8") as file:
     prompt_content = file.read()
 
 # 创建全局实例
-emoji_handler = EmojiHandler(root_dir)
+# Free wxauto4 polling adapter. It only relies on public foreground APIs.
+wechat_adapter = WxAuto4PollingAdapter(
+    contacts=listen_list,
+    poll_interval=config.wechat.poll_interval,
+    history_size=config.wechat.history_size,
+    state_path=os.path.join(root_dir, config.wechat.state_file),
+    process_existing_on_start=config.wechat.process_existing_on_start,
+    exact_match=config.wechat.exact_match,
+)
+# ``WxAuto4PollingAdapter`` is lazy. Do not connect to WeChat during import,
+# otherwise tests and the config web UI fail whenever WeChat is not running.
+ROBOT_WX_NAME = ""
+
+# Services that do not require a logged-in WeChat client.
+emoji_handler = EmojiHandler(root_dir, wechat=wechat_adapter)
 image_handler = ImageHandler(
     root_dir=root_dir,
     api_key=config.llm.api_key,
@@ -186,35 +193,42 @@ moonshot_ai = MoonShotAI(
     temperature=config.media.image_recognition.temperature
 )
 
-# 获取机器人名称
-wx = WeChat()
-ROBOT_WX_NAME = wx.A_MyIcon.Name
-logger.info(f"获取到机器人名称: {ROBOT_WX_NAME}")
+message_handler = None
+chat_bot = None
 
-message_handler = MessageHandler(
-    root_dir=root_dir,
-    api_key=config.llm.api_key,
-    base_url=config.llm.base_url,
-    dify_api_key=config.llm.dify_api_key,
-    dify_base_url=config.llm.dify_base_url,
-    max_groups=config.behavior.context.max_groups,
-    robot_name=ROBOT_WX_NAME,  # 使用动态获取的机器人名称
-    prompt_content=prompt_content,
-    image_handler=image_handler,
-    emoji_handler=emoji_handler,
-    voice_handler=voice_handler
-)
-chat_bot = ChatBot(message_handler, moonshot_ai)
 
-# 设置监听列表
-listen_list = config.user.listen_list
+def build_runtime() -> None:
+    """Build services that depend on a logged-in WeChat client."""
 
-# 循环添加监听对象
-for i in listen_list:
-    wx.AddListenChat(who=i, savepic=True)
+    global ROBOT_WX_NAME, message_handler, chat_bot
+    ROBOT_WX_NAME = wechat_adapter.get_my_name()
+    if not ROBOT_WX_NAME:
+        logger.warning("wxauto4 未返回当前微信昵称")
+    else:
+        logger.info("微信机器人昵称: %s", ROBOT_WX_NAME)
 
-# 消息队列接受消息时间间隔
-wait = 1
+    message_handler = MessageHandler(
+        root_dir=root_dir,
+        api_key=config.llm.api_key,
+        base_url=config.llm.base_url,
+        dify_api_key=config.llm.dify_api_key,
+        dify_base_url=config.llm.dify_base_url,
+        ai_provider=config.llm.provider,
+        model=config.llm.model,
+        max_tokens=config.llm.max_tokens,
+        temperature=config.llm.temperature,
+        max_groups=config.behavior.context.max_groups,
+        robot_name=ROBOT_WX_NAME,
+        prompt_content=prompt_content,
+        image_handler=image_handler,
+        emoji_handler=emoji_handler,
+        voice_handler=voice_handler,
+        wechat=wechat_adapter,
+    )
+    chat_bot = ChatBot(message_handler, moonshot_ai, wechat_adapter)
+
+
+wait = wechat_adapter.poll_interval
 
 # 全局变量
 last_chat_time = None
@@ -249,10 +263,11 @@ def is_quiet_time() -> bool:
 
 def get_random_countdown_time():
     """获取随机倒计时时间"""
-    return random.randint(
-        config.behavior.auto_message.min_hours * 3600,
-        config.behavior.auto_message.max_hours * 3600
-    )
+    min_seconds = int(float(config.behavior.auto_message.min_hours) * 3600)
+    max_seconds = int(float(config.behavior.auto_message.max_hours) * 3600)
+    if min_seconds > max_seconds:
+        min_seconds, max_seconds = max_seconds, min_seconds
+    return random.randint(min_seconds, max_seconds)
 
 def auto_send_message():
     """自动发送消息"""
@@ -296,196 +311,80 @@ def start_countdown():
     is_countdown_running = True
 
 def message_listener():
-    wx = None
-    last_window_check = 0
-    check_interval = 600
-    
+    """使用免费 wxauto4 前台 API 轮询消息。"""
     while True:
         try:
-            current_time = time.time()
-            
-            if wx is None or (current_time - last_window_check > check_interval):
-                wx = WeChat()
-                if not wx.GetSessionList():
-                    time.sleep(5)
+            for msg in wechat_adapter.poll_once():
+                if msg.is_self or not msg.content:
                     continue
-                last_window_check = current_time
-            
-            msgs = wx.GetListenMessage()
-            if not msgs:
-                time.sleep(wait)
-                continue
-                
-            for chat in msgs:
-                who = chat.who
-                if not who:
-                    continue
-                    
-                one_msgs = msgs.get(chat)
-                if not one_msgs:
-                    continue
-                    
-                for msg in one_msgs:
-                    try:
-                        msgtype = msg.type
-                        content = msg.content
-                        if not content:
-                            continue
-                        if msgtype != 'friend':
-                            logger.debug(f"非好友消息，忽略! 消息类型: {msgtype}")
-                            continue  
-                            # 接收窗口名跟发送人一样，代表是私聊，否则是群聊
-                        if who == msg.sender:
-                            chat_bot.handle_wxauto_message(msg, msg.sender) # 处理私聊信息
-                        elif ROBOT_WX_NAME != '' and (bool(re.match(f'^{ROBOT_WX_NAME}', msg.content)) or bool(re.search(f'@{ROBOT_WX_NAME}', msg.content))):
-                        # 如果消息以娜娜开头或包含@娜娜，进行回复
-                            chat_bot.handle_wxauto_message(msg, who, is_group=True)
-                        # elif ROBOT_WX_NAME != '' and (bool(re.search(f'@{ROBOT_WX_NAME}', msg.content)) or bool(re.search(f'{ROBOT_WX_NAME}', msg.content))): 
-                        #     # 修改：在群聊被@时或者被叫名字，传入群聊ID(who)作为回复目标
-                        #     chat_bot.handle_wxauto_message(msg, who, is_group=True) 
-                        else:
-                            logger.debug(f"非需要处理消息，可能是群聊非@消息: {content}")   
-                    except Exception as e:
-                        logger.debug(f"处理单条消息失败: {str(e)}")
-                        continue
-                        
-        except Exception as e:
-            logger.debug(f"消息监听出错: {str(e)}")
-            wx = None
+                chat_bot.handle_wxauto_message(
+                    msg,
+                    msg.chat_name,
+                    is_group=msg.is_group,
+                )
+        except Exception as exc:
+            logger.error(f"微信轮询失败: {str(exc)}", exc_info=True)
+            wechat_adapter.reconnect()
         time.sleep(wait)
 
 def initialize_wx_listener():
-    """
-    初始化微信监听，包含重试机制
-    """
+    """初始化免费 wxauto4 并验证配置的会话。"""
     max_retries = 3
-    retry_delay = 2  # 秒
-    
+    retry_delay = 2
+
     for attempt in range(max_retries):
         try:
-            wx = WeChat()
-            if not wx.GetSessionList():
-                logger.error("未检测到微信会话列表，请确保微信已登录")
-                time.sleep(retry_delay)
-                continue
-                
-            # 循环添加监听对象，修改savepic参数为False
-            for chat_name in listen_list:
-                try:
-                    # 先检查会话是否存在
-                    if not wx.ChatWith(chat_name):
-                        logger.error(f"找不到会话: {chat_name}")
-                        continue
-                        
-                    # 尝试添加监听，设置savepic=False
-                    wx.AddListenChat(who=chat_name, savepic=True)
-                    logger.info(f"成功添加监听: {chat_name}")
-                    time.sleep(0.5)  # 添加短暂延迟，避免操作过快
-                except Exception as e:
-                    logger.error(f"添加监听失败 {chat_name}: {str(e)}")
-                    continue
-                    
-            return wx
-            
-        except Exception as e:
-            logger.error(f"初始化微信失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+            if not wechat_adapter.is_online():
+                raise RuntimeError("未检测到已登录的微信 4 窗口")
+
+            # Build chat baselines in the listener thread instead of opening every chat twice at startup.
+            return wechat_adapter
+        except Exception as exc:
+            logger.error(
+                "微信初始化失败 (%s/%s): %s",
+                attempt + 1,
+                max_retries,
+                exc,
+            )
+            wechat_adapter.reconnect()
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
-            else:
-                raise Exception("微信初始化失败，请检查微信是否正常运行")
-    
+
     return None
-
-def print_banner():
-    """打印启动横幅"""
-    banner = f"""
-{Fore.CYAN}
-╔══════════════════════════════════════════════╗
-║          My Dream Moments - AI Chat          ║
-║            Created with ❤️  by umaru         ║   
-║ https://github.com/umaru-233/My-Dream-Moments║
-╚══════════════════════════════════════════════╝
-
-My Dream Moments - AI Chat  Copyright (C) 2025,github.com/umaru-233
-This program comes with ABSOLUTELY NO WARRANTY; for details please read
-https://www.gnu.org/licenses/gpl-3.0.en.html.
-该程序是基于GPLv3许可证分发的，因此该程序不提供任何保证；有关更多信息，请参阅GPLv3许可证。
-This is free software, and you are welcome to redistribute it
-under certain conditions; please read
-https://www.gnu.org/licenses/gpl-3.0.en.html.
-这是免费软件，欢迎您二次分发它，在某些情况下，请参阅GPLv3许可证。
-It's freeware, and if you bought it for money, you've been scammed!
-这是免费软件，如果你是花钱购买的，说明你被骗了！
-{Style.RESET_ALL}"""
-    print(banner)
-
-def print_status(message: str, status: str = "info", emoji: str = ""):
-    """打印状态信息"""
-    colors = {
-        "success": Fore.GREEN,
-        "info": Fore.BLUE,
-        "warning": Fore.YELLOW,
-        "error": Fore.RED
-    }
-    color = colors.get(status, Fore.WHITE)
-    print(f"{color}{emoji} {message}{Style.RESET_ALL}")
 
 def main():
     listener_thread = None  # 在函数开始时定义线程变量
     try:
-        print_banner()
         print_status("系统启动中...", "info", "🚀")
-        print("-" * 50)
-        
-        # 清理缓存
-        print_status("清理系统缓存...", "info", "��")
+
+        # 清理运行缓存并确保目录存在；详细信息写入日志，不刷屏。
         cleanup_pycache()
         logger_config.cleanup_old_logs()
         cleanup_utils.cleanup_all()
         image_handler.cleanup_temp_dir()
         voice_handler.cleanup_voice_dir()
-        print_status("缓存清理完成", "success", "✨")
-        
-        # 检查系统目录
-        print_status("检查系统目录...", "info", "��")
-        required_dirs = ['data', 'logs', 'src/config']
-        for dir_name in required_dirs:
-            dir_path = os.path.join(root_dir, dir_name)
-            if not os.path.exists(dir_path):
-                os.makedirs(dir_path)
-                print_status(f"创建目录: {dir_name}", "info", "📁")
-        print_status("目录检查完成", "success", "✅")
-        
-        # 初始化微信监听
+        for dir_name in ("data", "logs", "src/config"):
+            os.makedirs(os.path.join(root_dir, dir_name), exist_ok=True)
+
         print_status("初始化微信监听...", "info", "🤖")
         wx = initialize_wx_listener()
         if not wx:
             print_status("微信初始化失败，请确保微信已登录并保持在前台运行!", "error", "❌")
             return
-        print_status("微信监听初始化完成", "success", "✅")
 
-        # 启动消息监听线程
-        print_status("启动消息监听线程...", "info", "📡")
-        listener_thread = threading.Thread(target=message_listener)
-        listener_thread.daemon = True  # 确保线程是守护线程
+        build_runtime()
+        listener_thread = threading.Thread(target=message_listener, daemon=True)
         listener_thread.start()
-        print_status("消息监听已启动", "success", "✅")
-
-        # 启动自动消息
-        print_status("启动自动消息系统...", "info", "⏰")
         start_countdown()
-        print_status("自动消息系统已启动", "success", "✅")
-        
-        print("-" * 50)
-        print_status("系统初始化完成", "success", "🌟")
-        print("=" * 50)
-        
+        print_status("机器人已启动，正在等待新消息", "success", "✅")
+
         # 主循环
         while True:
             time.sleep(1)
             if not listener_thread.is_alive():
                 print_status("监听线程已断开，尝试重新连接...", "warning", "🔄")
                 try:
+                    wechat_adapter.reconnect()
                     wx = initialize_wx_listener()
                     if wx:
                         listener_thread = threading.Thread(target=message_listener)
@@ -517,11 +416,12 @@ def main():
 
 if __name__ == '__main__':
     try:
+        print_banner()
         main()
     except KeyboardInterrupt:
         print("\n")
         print_status("用户终止程序", "warning", "🛑")
-        print_status("感谢使用，再见！", "info", "��")
+        print_status("感谢使用，再见！", "info", "👋")
         print("\n")
     except Exception as e:
         print_status(f"程序异常退出: {str(e)}", "error", "💥")
