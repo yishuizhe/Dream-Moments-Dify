@@ -1077,7 +1077,7 @@ type - 显示文件内容
         elif command.lower() == 'version':
             return jsonify({
                 'status': 'success',
-                'output': 'KouriChat v1.3.1'
+                'output': 'Dream-Moments-Dify v1.4.0'
             })
             
         elif command.lower() == 'memory':
