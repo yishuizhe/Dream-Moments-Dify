@@ -1,5 +1,5 @@
 {
-    "version": "1.4.0",
+    "version": "1.5.0",
     "last_update": "2026-07-14",
-    "description": "新增免费 wxauto4 智能轮询、DeepSeek 直连、群聊免 @ 回复和情绪 GIF，并更新公开脱敏配置与文档。"
+    "description": "新增 Dream 外部群聊插件系统、GroupFun 适配和微信引用回复触发，并保留免费 wxauto4 智能轮询、DeepSeek 直连与情绪 GIF。"
 }

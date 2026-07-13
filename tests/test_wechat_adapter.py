@@ -198,6 +198,31 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
         self.assertEqual(messages[0].chat_name, "好友")
         self.assertEqual(messages[0].sender, "群成员")
 
+
+    def test_quote_message_extracts_reply_and_target_metadata(self):
+        fake = FakeWeChat(
+            {
+                "\u597d\u53cb": [
+                    FakeMessage(
+                        "\u7fa4\u6210\u5458",
+                        "\u7ee7\u7eed\u8bf4 \u5f15\u7528 \u673a\u5668\u4eba \u7684\u6d88\u606f: \u4e0a\u4e00\u6761\u56de\u590d",
+                        type="quote",
+                        attr="friend",
+                    )
+                ]
+            },
+            chat_types={"\u597d\u53cb": "group"},
+        )
+        adapter = self.make_adapter(fake, process_existing_on_start=True)
+
+        messages = adapter.poll_once()
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].content, "\u7ee7\u7eed\u8bf4")
+        self.assertTrue(messages[0].is_quote)
+        self.assertEqual(messages[0].quoted_sender, "\u673a\u5668\u4eba")
+        self.assertEqual(messages[0].quoted_content, "\u4e0a\u4e00\u6761\u56de\u590d")
+
     def test_private_chat_uses_chat_info_even_if_sender_name_differs(self):
         fake = FakeWeChat({"好友": [FakeMessage("真实昵称", "你好")]})
         adapter = self.make_adapter(fake, process_existing_on_start=True)
@@ -247,6 +272,8 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
 
             self.assertEqual(fake.sent_messages, [("好友", "回复")])
             self.assertEqual(fake.sent_files, [("好友", str(file_path.resolve()))])
+            self.assertTrue(adapter.is_recent_sent_text("好友", "回复"))
+            self.assertFalse(adapter.is_recent_sent_text("其他会话", "回复"))
 
 
 if __name__ == "__main__":

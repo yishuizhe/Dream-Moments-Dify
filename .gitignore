@@ -196,3 +196,7 @@ cython_debug/
 # WeChat polling runtime state
 data/wechat_poll_state.json
 data/wechat_poll_state.json.tmp
+
+# External plugin repositories and runtime data
+/plugins/*
+!/plugins/README.md

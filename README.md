@@ -11,7 +11,8 @@
 - **免费微信 4 适配**：使用 `wxauto4==41.1.2`，兼容微信 `4.1.11.x` 的昵称读取。
 - **智能未读轮询**：启动时仅为白名单会话建立一次消息基线；之后通过 `GetSession()` 检查未读数和会话预览，只在收到新消息时打开对应聊天，不再持续来回刷新窗口。
 - **双 AI 后端**：默认支持 DeepSeek、SiliconFlow 等 OpenAI-compatible Chat Completions API，也可切换到 Dify Chat API。
-- **群聊回复不自动 @**：群聊仍可通过 `@机器人昵称` 或单独提及机器人昵称触发，但机器人回复不会再次 `@触发者`。
+- **群聊回复不自动 @**：群聊可通过 `@机器人昵称`、单独提及机器人昵称，或引用机器人的上一条消息触发；机器人回复不会再次 `@触发者`。
+- **外部群聊插件**：自动加载 `plugins/*/dream_plugin.py`；插件可观察白名单群消息并直接处理命令，异常不会中断主机器人。
 - **情绪 GIF 表情**：根据 AI 回复中的开心、难过、生气等关键词，发送对应的可爱动画猫咪表情。
 - **更简洁的输出与配置**：启动时只打印一份简洁版权横幅；控制台显示状态和警告，详细 INFO 日志写入 `logs/`；WebUI 仅展示常用微信轮询参数。
 
@@ -22,7 +23,8 @@
 - 微信好友和群聊中的文字对话；
 - 多轮上下文和自定义角色设定；
 - Dify 应用、Prompt 与模型参数管理；
-- `@机器人昵称` 和机器人昵称开头两种群聊触发方式；
+- `@机器人昵称`、机器人昵称开头和引用机器人消息三种群聊触发方式；
+- 外部插件目录扫描、隔离调用和直接回复；
 - 消息分段、队列处理以及图片、表情等原有处理模块；
 - 新增免费微信 4 智能轮询、DeepSeek 直连和情绪 GIF。
 
@@ -120,8 +122,31 @@ python run.py
 
 - `@机器人昵称 你好`
 - `机器人昵称 你好`
+- 在微信中引用机器人的上一条消息，再输入回复内容
 
-机器人会直接回复内容，不自动 `@触发者`。
+机器人会直接回复内容，不自动 `@触发者`。引用其他群成员的消息不会触发机器人。
+
+## 外部群聊插件
+
+Dream 会在启动时扫描项目根目录下的 `plugins/*/dream_plugin.py`。安装 GroupFun 群聊娱乐插件：
+
+```powershell
+New-Item -ItemType Directory -Force plugins | Out-Null
+git clone https://github.com/yishuizhe/dow-group-fun.git plugins/GroupFun
+Copy-Item plugins\GroupFun\config.json.template plugins\GroupFun\config.json
+python run.py
+```
+
+可直接在群聊中发送：
+
+- `今日水王` / `本周水王` / `本月水王`
+- `梗百科` / `梗排行榜`
+- `我的成就`
+- `娱乐帮助`
+
+这些插件命令不需要 `@机器人`。为了统计排行和梗，插件会观察 `LISTEN_LIST` 白名单中的普通群文本，并默认保存到本机 `plugins/GroupFun/data/fun_center.db`。插件没有返回命令结果时，Dream 才继续执行原有 AI 触发规则。插件回复不会自动 `@触发者`。
+
+插件目录、私人配置和运行数据库不会提交到 Dream 主仓库；详细配置、数据说明和 MIT 许可证见 GroupFun 插件仓库。
 
 ## 情绪 GIF 表情
 
@@ -147,7 +172,7 @@ data/avatars/MONO/emojis/
 - API Key、Token、Cookie、GitHub 凭据
 - 微信昵称、群名、联系人列表、微信号
 - 私人角色关系、真实姓名或聊天记录
-- `logs/`、`data/wechat_poll_state.json`、含私人信息的截图和运行时缓存
+- `logs/`、`data/wechat_poll_state.json`、`plugins/*/config.json`、插件数据库、含私人信息的截图和运行时缓存
 
 如果曾经把密钥提交到 Git 历史中，仅删除文件并不足够；应立即撤销旧密钥，并按需要清理 Git 历史。
 
@@ -159,7 +184,7 @@ python test.py
 python -m compileall -q src tests run.py run_config_web.py test.py
 ```
 
-测试覆盖微信消息去重、未读驱动轮询、群聊回复不自动 @、AI 后端切换、配置保存和微信兼容层。
+测试覆盖微信消息去重、未读驱动轮询、引用回复触发、外部插件隔离、群聊回复不自动 @、AI 后端切换、配置保存和微信兼容层。
 
 ## 已知限制
 

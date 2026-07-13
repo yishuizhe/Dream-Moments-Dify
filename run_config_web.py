@@ -1077,7 +1077,7 @@ type - 显示文件内容
         elif command.lower() == 'version':
             return jsonify({
                 'status': 'success',
-                'output': 'Dream-Moments-Dify v1.4.0'
+                'output': 'Dream-Moments-Dify v1.5.0'
             })
             
         elif command.lower() == 'memory':

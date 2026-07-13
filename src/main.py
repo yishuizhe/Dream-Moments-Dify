@@ -16,6 +16,7 @@ from handlers.emoji import EmojiHandler
 from handlers.image import ImageHandler
 from handlers.message import MessageHandler
 from handlers.voice import VoiceHandler
+from plugins.manager import PluginManager
 from services.ai.moonshot import MoonShotAI
 from utils.cleanup import cleanup_pycache, CleanupUtils
 from utils.logger import LoggerConfig
@@ -36,7 +37,7 @@ chat_contexts = {}  # 存储上下文
 init()
 
 class ChatBot:
-    def __init__(self, message_handler, moonshot_ai, wechat):
+    def __init__(self, message_handler, moonshot_ai, wechat, plugin_manager=None):
         self.message_handler = message_handler
         self.moonshot_ai = moonshot_ai
         self.user_queues = {}  # 将user_queues移到类的实例变量
@@ -45,6 +46,11 @@ class ChatBot:
         # 获取机器人的微信名称
         self.wx = wechat
         self.robot_name = self.wx.get_my_name()
+        self.plugin_manager = (
+            plugin_manager
+            if plugin_manager is not None
+            else PluginManager(os.path.join(root_dir, "plugins"), logger=logger)
+        )
         logger.info(f"机器人名称: {self.robot_name}")
 
     def process_user_messages(self, chat_id):
@@ -93,22 +99,52 @@ class ChatBot:
             
             # 处理群聊消息
             if is_group:
-                # 无法取得机器人昵称时，不能安全判断群聊是否在叫机器人。
+                # 外部插件需要观察白名单群的每条文本消息，用于统计和命令处理。
+                plugin_reply = self.plugin_manager.handle_group_message(
+                    chat_id=chatName,
+                    sender_id=getattr(msg, 'sender_id', None) or username,
+                    sender_name=username,
+                    content=content,
+                    bot_name=self.robot_name or "",
+                    timestamp=getattr(msg, 'timestamp', None),
+                    is_self=bool(getattr(msg, 'is_self', False)),
+                )
+                if plugin_reply:
+                    self.wx.send_text(chatName, plugin_reply)
+                    return
+
+                # 群聊触发需要机器人昵称；引用消息还可通过最近发送文本兼容群昵称。
                 if not self.robot_name:
                     logger.warning("未取得机器人昵称，已跳过群聊消息")
                     return
                 original_content = content
-                # 处理@机器人
+                quoted_sender = re.sub(
+                    r"^[\s@]+|[\s:\uFF1A]+$",
+                    "",
+                    str(getattr(msg, 'quoted_sender', '') or ''),
+                )
+                quoted_content = str(getattr(msg, 'quoted_content', '') or '')
+                recent_text_checker = getattr(self.wx, 'is_recent_sent_text', None)
+                quote_matches_recent_reply = bool(
+                    quoted_content
+                    and callable(recent_text_checker)
+                    and recent_text_checker(chatName, quoted_content)
+                )
+                is_reply_to_bot = bool(
+                    getattr(msg, 'is_quote', False)
+                    and (quoted_sender == self.robot_name or quote_matches_recent_reply)
+                )
                 if f'@{self.robot_name}' in original_content:
                     content = re.sub(rf'@{re.escape(self.robot_name)}\s*', '', content).strip()
-                # **处理直接提及机器人名字**
-                elif re.search(rf'(^|[\s,，]){re.escape(self.robot_name)}([\s,，]|$)', original_content):
-                    content = re.sub(rf'(^|[\s,，]){re.escape(self.robot_name)}([\s,，]|$)', '', original_content).strip()
+                elif re.search(rf'(^|[\s,\uFF0C]){re.escape(self.robot_name)}([\s,\uFF0C]|$)', original_content):
+                    content = re.sub(rf'(^|[\s,\uFF0C]){re.escape(self.robot_name)}([\s,\uFF0C]|$)', '', original_content).strip()
+                elif is_reply_to_bot:
+                    content = original_content.strip()
                 else:
-                    logger.info("未检测到@机器人，也未单独提及机器人名字，跳过处理")
+                    logger.info("群聊消息未触发机器人，已跳过")
                     return
-            
-            # 处理图片消息
+
+            # 处理图片消息。
             if content.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                 img_path = content
                 is_emoji = False

@@ -104,6 +104,193 @@ class StartupCompatibilityTests(unittest.TestCase):
         bot.handle_wxauto_message(FakeMessage(), "test-group", is_group=True)
         self.assertEqual(bot.user_queues, {})
 
+
+    def test_group_plugin_command_needs_no_at_and_bypasses_llm_queue(self):
+        import main
+
+        class FakeWeChat:
+            def __init__(self):
+                self.sent = []
+
+            def get_my_name(self):
+                return "\u673a\u5668\u4eba"
+
+            def send_text(self, chat_name, text):
+                self.sent.append((chat_name, text))
+
+        class FakePluginManager:
+            def __init__(self):
+                self.calls = []
+
+            def handle_group_message(self, **message):
+                self.calls.append(message)
+                return "\u3010\u4eca\u65e5\u6c34\u738b\u3011"
+
+        class FakeMessage:
+            sender = "\u7fa4\u6210\u5458"
+            content = "\u4eca\u65e5\u6c34\u738b"
+            is_self = False
+
+        class FakeMessageHandler:
+            def add_to_queue(self, **kwargs):
+                raise AssertionError("plugin command must bypass the LLM queue")
+
+        wechat = FakeWeChat()
+        plugins = FakePluginManager()
+        bot = main.ChatBot(FakeMessageHandler(), object(), wechat, plugin_manager=plugins)
+        bot.handle_wxauto_message(FakeMessage(), "\u6d4b\u8bd5\u7fa4", is_group=True)
+
+        self.assertEqual(wechat.sent, [("\u6d4b\u8bd5\u7fa4", "\u3010\u4eca\u65e5\u6c34\u738b\u3011")])
+        self.assertEqual(len(plugins.calls), 1)
+        self.assertEqual(bot.user_queues, {})
+
+    def test_plain_group_message_is_observed_by_plugin_without_triggering_llm(self):
+        import main
+
+        class FakeWeChat:
+            def get_my_name(self):
+                return "\u673a\u5668\u4eba"
+
+        class FakePluginManager:
+            def __init__(self):
+                self.calls = []
+
+            def handle_group_message(self, **message):
+                self.calls.append(message)
+                return None
+
+        class FakeMessage:
+            sender = "\u7fa4\u6210\u5458"
+            content = "\u666e\u901a\u7fa4\u804a"
+            is_self = False
+
+        class FakeMessageHandler:
+            def add_to_queue(self, **kwargs):
+                raise AssertionError("untriggered group message must not reach the LLM")
+
+        plugins = FakePluginManager()
+        bot = main.ChatBot(FakeMessageHandler(), object(), FakeWeChat(), plugin_manager=plugins)
+        bot.handle_wxauto_message(FakeMessage(), "\u6d4b\u8bd5\u7fa4", is_group=True)
+
+        self.assertEqual(len(plugins.calls), 1)
+        self.assertEqual(plugins.calls[0]["content"], "\u666e\u901a\u7fa4\u804a")
+        self.assertEqual(bot.user_queues, {})
+
+    def test_quote_reply_to_bot_triggers_group_ai_without_at(self):
+        import main
+
+        class FakeTimer:
+            def __init__(self, *args, **kwargs):
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def cancel(self):
+                pass
+
+        class FakeWeChat:
+            def get_my_name(self):
+                return "\u673a\u5668\u4eba"
+
+        class FakePluginManager:
+            def handle_group_message(self, **message):
+                return None
+
+        class FakeMessage:
+            sender = "\u7fa4\u6210\u5458"
+            content = "\u7ee7\u7eed\u8bf4"
+            is_self = False
+            is_quote = True
+            quoted_sender = "\u673a\u5668\u4eba"
+            quoted_content = "\u4e0a\u4e00\u6761\u56de\u590d"
+
+        class FakeMessageHandler:
+            def add_to_queue(self, **kwargs):
+                pass
+
+        with patch.object(main.threading, "Timer", FakeTimer):
+            bot = main.ChatBot(
+                FakeMessageHandler(), object(), FakeWeChat(), plugin_manager=FakePluginManager()
+            )
+            bot.handle_wxauto_message(FakeMessage(), "\u6d4b\u8bd5\u7fa4", is_group=True)
+
+        self.assertIn("\u6d4b\u8bd5\u7fa4", bot.user_queues)
+        self.assertIn("\u7ee7\u7eed\u8bf4", bot.user_queues["\u6d4b\u8bd5\u7fa4"]["messages"][0])
+
+    def test_quote_reply_matches_recent_bot_text_when_group_alias_differs(self):
+        import main
+
+        class FakeTimer:
+            def __init__(self, *args, **kwargs):
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def cancel(self):
+                pass
+
+        class FakeWeChat:
+            def get_my_name(self):
+                return "机器人"
+
+            def is_recent_sent_text(self, chat_name, text):
+                return chat_name == "测试群" and text == "上一条回复"
+
+        class FakePluginManager:
+            def handle_group_message(self, **message):
+                return None
+
+        class FakeMessage:
+            sender = "群成员"
+            content = "继续说"
+            is_self = False
+            is_quote = True
+            quoted_sender = "机器人在本群的昵称"
+            quoted_content = "上一条回复"
+
+        class FakeMessageHandler:
+            def add_to_queue(self, **kwargs):
+                pass
+
+        with patch.object(main.threading, "Timer", FakeTimer):
+            bot = main.ChatBot(
+                FakeMessageHandler(), object(), FakeWeChat(), plugin_manager=FakePluginManager()
+            )
+            bot.handle_wxauto_message(FakeMessage(), "测试群", is_group=True)
+
+        self.assertIn("测试群", bot.user_queues)
+        self.assertIn("继续说", bot.user_queues["测试群"]["messages"][0])
+
+    def test_quote_reply_to_other_member_does_not_trigger_group_ai(self):
+        import main
+
+        class FakeWeChat:
+            def get_my_name(self):
+                return "\u673a\u5668\u4eba"
+
+        class FakePluginManager:
+            def handle_group_message(self, **message):
+                return None
+
+        class FakeMessage:
+            sender = "\u7fa4\u6210\u5458"
+            content = "\u7ee7\u7eed\u8bf4"
+            is_self = False
+            is_quote = True
+            quoted_sender = "\u5176\u4ed6\u4eba"
+
+        class FakeMessageHandler:
+            def add_to_queue(self, **kwargs):
+                raise AssertionError("quote to another member must not trigger the bot")
+
+        bot = main.ChatBot(
+            FakeMessageHandler(), object(), FakeWeChat(), plugin_manager=FakePluginManager()
+        )
+        bot.handle_wxauto_message(FakeMessage(), "\u6d4b\u8bd5\u7fa4", is_group=True)
+        self.assertEqual(bot.user_queues, {})
+
     def test_wechat_startup_does_not_open_every_contact_for_validation(self):
         import main
 

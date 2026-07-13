@@ -11,7 +11,8 @@ This project preserves the original attribution and GPLv3 license. It does not b
 - Free `wxauto4==41.1.2` adapter with WeChat `4.1.11.x` nickname compatibility.
 - `GetSession()`-driven polling: chats are opened once to build a baseline, then only unread or preview-changed whitelisted chats are opened.
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
-- Group replies no longer automatically mention the triggering member.
+- Group messages can also trigger the bot by quoting a previous bot message, and replies no longer automatically mention the triggering member.
+- External `plugins/*/dream_plugin.py` support with isolated failures and direct command replies.
 - Emotion-aware animated cat GIFs from Google Noto Emoji Animation.
 - One concise startup banner, WARNING+ console logs, and detailed INFO file logs.
 
@@ -54,7 +55,22 @@ The local `src/config/config.json` is ignored by Git. Never commit API keys, con
 
 The first polling round opens whitelisted chats to build message baselines. Later rounds inspect the conversation list without switching chats and only open a chat when its unread count or preview changes. Sending a reply/file still requires foreground UI automation and may briefly change focus.
 
-Group chats can trigger the bot with `@bot-name` or by mentioning the bot name as a standalone name. Replies are sent without automatically mentioning the sender.
+Group chats can trigger the bot with `@bot-name`, by mentioning the bot name as a standalone name, or by quoting a previous bot message. Quoting another member does not trigger the bot. Replies are sent without automatically mentioning the sender.
+
+## External group plugins
+
+Dream discovers `plugins/*/dream_plugin.py` at startup. Install GroupFun from the Dream project root:
+
+```powershell
+New-Item -ItemType Directory -Force plugins | Out-Null
+git clone https://github.com/yishuizhe/dow-group-fun.git plugins/GroupFun
+Copy-Item plugins\GroupFun\config.json.template plugins\GroupFun\config.json
+python run.py
+```
+
+GroupFun commands such as `今日水王`, `梗百科`, `我的成就`, and `娱乐帮助` do not require an `@bot-name` mention. The plugin observes ordinary text in whitelisted groups for local statistics and stores its SQLite database under `plugins/GroupFun/data/` by default. When no plugin returns a reply, Dream continues with its normal AI trigger rules.
+
+Runtime plugin repositories, private plugin configuration, and plugin databases are ignored by the Dream repository.
 
 ## Emoji assets
 

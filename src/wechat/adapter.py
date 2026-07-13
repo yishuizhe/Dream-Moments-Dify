@@ -11,8 +11,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -30,6 +32,9 @@ class IncomingMessage:
     message_type: str = "friend"
     is_group: bool = False
     is_self: bool = False
+    is_quote: bool = False
+    quoted_sender: str = ""
+    quoted_content: str = ""
     raw: Any = None
 
     @property
@@ -80,6 +85,8 @@ class WxAuto4PollingAdapter:
         self._my_name_cache = ""
         self._ui_lock = threading.RLock()
         self._state_lock = threading.Lock()
+        self._sent_lock = threading.Lock()
+        self._recent_sent_texts: dict[str, deque[str]] = {}
         self._snapshots: dict[str, list[str]] = {}
         # GetSession() inspects the conversation list without opening chats.
         # Preview signatures also detect changes in the currently open chat.
@@ -206,14 +213,43 @@ class WxAuto4PollingAdapter:
             if at:
                 kwargs["at"] = at
             try:
-                return method(**kwargs)
+                result = method(**kwargs)
             except TypeError:
                 kwargs.pop("at", None)
                 try:
-                    return method(**kwargs)
+                    result = method(**kwargs)
                 except TypeError:
                     kwargs.pop("exact", None)
-                    return method(**kwargs)
+                    result = method(**kwargs)
+            self._remember_sent_text(chat_name, text)
+            return result
+
+    def is_recent_sent_text(self, chat_name: str, text: str) -> bool:
+        """判断被引用的文本是否是机器人最近在该会话发送的内容。
+
+        群内设置了“我在本群的昵称”时，微信引用卡片中的发送者名称可能与
+        ``get_my_name()`` 不一致，因此使用最近发送文本作为安全的兼容回退。
+        记录仅保存在内存中，不写入日志或状态文件。
+        """
+
+        normalized = self._normalize_match_text(text)
+        if not normalized:
+            return False
+        with self._sent_lock:
+            return normalized in self._recent_sent_texts.get(str(chat_name), ())
+
+    def _remember_sent_text(self, chat_name: str, text: str) -> None:
+        normalized = self._normalize_match_text(text)
+        if not normalized:
+            return
+        key = str(chat_name)
+        with self._sent_lock:
+            history = self._recent_sent_texts.setdefault(key, deque(maxlen=self.history_size))
+            history.append(normalized)
+
+    @staticmethod
+    def _normalize_match_text(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "")).strip()
 
     def send_file(self, chat_name: str, file_path: str | os.PathLike[str]) -> Any:
         path = str(Path(file_path).expanduser().resolve())
@@ -426,15 +462,20 @@ class WxAuto4PollingAdapter:
         *,
         is_group_chat: bool | None = None,
     ) -> _SnapshotMessage | None:
-        content = self._first_text(raw, "content", "text", "raw")
+        raw_content = self._first_text(raw, "content", "text", "raw")
         sender = self._first_text(raw, "sender", "sender_name", "name")
         kind = self._first_text(raw, "type", "attr") or raw.__class__.__name__
         attr = self._first_text(raw, "attr")
 
-        if not content:
+        if not raw_content:
             return None
 
         kind_lower = f"{kind} {attr} {raw.__class__.__name__}".lower()
+        content, is_quote, quoted_sender, quoted_content = self._parse_quote_message(
+            raw, raw_content, kind_lower
+        )
+        if not content:
+            return None
         my_name = self.get_my_name()
         is_self = (
             any(marker in kind_lower for marker in ("selfmessage", " self", "sent", "outgoing"))
@@ -459,6 +500,9 @@ class WxAuto4PollingAdapter:
                 "content": content,
                 "kind": kind,
                 "attr": attr,
+                "is_quote": is_quote,
+                "quoted_sender": quoted_sender,
+                "quoted_content": quoted_content,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -471,9 +515,56 @@ class WxAuto4PollingAdapter:
             message_type="self" if is_self else (kind or "friend"),
             is_group=is_group,
             is_self=is_self,
+            is_quote=is_quote,
+            quoted_sender=quoted_sender,
+            quoted_content=quoted_content,
             raw=raw,
         )
         return _SnapshotMessage(token=token, message=message, incoming_human=incoming_human)
+
+    @classmethod
+    def _parse_quote_message(
+        cls, raw: Any, content: str, kind_lower: str
+    ) -> tuple[str, bool, str, str]:
+        """Extract the user's reply and quoted message metadata from wxauto4.
+
+        wxauto4 exposes quote messages as ``QuoteMessage`` and currently formats
+        their content as ``<reply> quote <sender>'s message: <quoted text>`` in
+        the active UI language. Explicit attributes are preferred when a future
+        wxauto4 build provides them; the regex is the compatibility fallback.
+        """
+
+        quoted_sender = cls._first_text(
+            raw,
+            "quoted_sender",
+            "quote_sender",
+            "reply_sender",
+            "source_sender",
+        )
+        quoted_content = cls._first_text(
+            raw,
+            "quoted_content",
+            "quote_content",
+            "reply_content",
+            "source_content",
+        )
+        is_quote = "quote" in kind_lower or bool(quoted_sender or quoted_content)
+        reply_content = content.strip()
+
+        # wxauto4 QuoteMessage.repattern for Simplified Chinese:
+        # ^(.*)\s*引用\s+(.+?)\s+的消息\s*:\s*(.*)$
+        match = re.match(
+            r"^(.*?)\s*引用\s+(.+?)\s+的消息\s*[:：]\s*(.*)$",
+            content,
+            flags=re.DOTALL,
+        )
+        if match:
+            is_quote = True
+            reply_content = match.group(1).strip()
+            quoted_sender = quoted_sender or match.group(2).strip()
+            quoted_content = quoted_content or match.group(3).strip()
+
+        return reply_content, is_quote, quoted_sender, quoted_content
 
     @staticmethod
     def _first_text(obj: Any, *names: str) -> str:
