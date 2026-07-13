@@ -334,7 +334,7 @@
             z-index: 1050;
         }
     </style>
-    <script defer src="http://umami.kourichat.com/script.js" data-website-id="319cc5bc-c057-4f6c-8bc4-4af5e110add1"></script>
+    <script defer src="https://umami.kourichat.com/script.js" data-website-id="319cc5bc-c057-4f6c-8bc4-4af5e110add1"></script>
     <script src="/static/js/bootstrap.bundle.min.js"></script>
     <script src="/static/js/dark-mode.js"></script>
 </head>
@@ -577,12 +577,15 @@
                     const userListElement = document.getElementById('selected_users_' + key);
                     const userDiv = document.createElement('div');
                     userDiv.className = 'list-group-item d-flex justify-content-between align-items-center';
-                    userDiv.innerHTML = `
-                        ${value}
-                        <button type="button" class="btn btn-danger btn-sm" onclick="removeUser('${key}', '${value}')">
-                            <i class="bi bi-x-lg"></i>
-                        </button>
-                    `;
+                    userDiv.appendChild(document.createTextNode(value));
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.className = 'btn btn-danger btn-sm';
+                    removeButton.addEventListener('click', () => removeUser(key, value));
+                    const removeIcon = document.createElement('i');
+                    removeIcon.className = 'bi bi-x-lg';
+                    removeButton.appendChild(removeIcon);
+                    userDiv.appendChild(removeButton);
                     userListElement.appendChild(userDiv);
                 }
             }
@@ -603,12 +606,15 @@
                     const userListElement = document.getElementById('selected_users_' + key);
                     const userDiv = document.createElement('div');
                     userDiv.className = 'list-group-item d-flex justify-content-between align-items-center';
-                    userDiv.innerHTML = `
-                        ${newValue}
-                        <button type="button" class="btn btn-danger btn-sm" onclick="removeUser('${key}', '${newValue}')">
-                            <i class="bi bi-x-lg"></i>
-                        </button>
-                    `;
+                    userDiv.appendChild(document.createTextNode(newValue));
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.className = 'btn btn-danger btn-sm';
+                    removeButton.addEventListener('click', () => removeUser(key, newValue));
+                    const removeIcon = document.createElement('i');
+                    removeIcon.className = 'bi bi-x-lg';
+                    removeButton.appendChild(removeIcon);
+                    userDiv.appendChild(removeButton);
                     userListElement.appendChild(userDiv);
                     
                     // 清空输入框

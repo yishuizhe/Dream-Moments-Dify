@@ -41,7 +41,7 @@ Group chat triggered with the bot name at the beginning:
 
 - Windows 10/11
 - A logged-in WeChat 4 client
-- Python `>=3.9,<3.14`
+- Python `>=3.10,<3.14`
 
 ```powershell
 python -m pip install -r requirements.txt
