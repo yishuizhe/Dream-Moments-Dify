@@ -15,6 +15,26 @@ This project preserves the original attribution and GPLv3 license. It does not b
 - Emotion-aware animated cat GIFs from Google Noto Emoji Animation.
 - One concise startup banner, WARNING+ console logs, and detailed INFO file logs.
 
+## Project history and retained capabilities
+
+Earlier versions added Dify integration, improved group-chat wake-up handling, and role-based conversations on top of the upstream projects. This update retains those capabilities while adding the free WeChat 4 polling adapter, direct DeepSeek-compatible access, and emotion GIFs. Existing modules for multi-turn context, prompts, message splitting/queues, images, and emoji handling remain available.
+
+## Usage examples
+
+These are interface examples from an earlier version. Personal identifiers have been permanently redacted. The current interface may differ slightly, and current group replies no longer automatically mention the triggering member.
+
+Private chat:
+
+![Private chat example](doc/img/solo.png)
+
+Group chat triggered with `@bot-name`:
+
+![Group mention example](doc/img/png1.png)
+
+Group chat triggered with the bot name at the beginning:
+
+![Group name trigger example](doc/img/png2.png)
+
 ## Requirements
 
 - Windows 10/11
@@ -28,7 +48,7 @@ python run_config_web.py
 python run.py
 ```
 
-The local `src/config/config.json` is ignored by Git. Never commit API keys, contact names, private prompts, logs, screenshots, or chat records.
+The local `src/config/config.json` is ignored by Git. Never commit API keys, contact names, private prompts, logs, screenshots containing private information, or chat records.
 
 ## Polling behavior
 
@@ -47,6 +67,14 @@ python -m unittest discover -s tests -v
 python test.py
 python -m compileall -q src tests run.py run_config_web.py test.py
 ```
+
+## Disclaimer
+
+- This project is intended for personal learning, technical research, and private use only. Do not use it for bulk marketing, harassment, unlawful activity, or platform-rule evasion.
+- LLM output does not represent the views of this project, its maintainers, or upstream authors. Users are responsible for reviewing generated content and for their use of it.
+- Respect the rights attached to custom characters, prompts, images, and chat content, and do not distribute private or protected material without permission.
+- The software is provided as-is, without warranties regarding WeChat compatibility, model accuracy, service availability, or losses arising from its use.
+- Users must comply with applicable law, WeChat rules, and third-party API terms, and must protect API keys, contact details, and chat records.
 
 ## Upstream and license
 
