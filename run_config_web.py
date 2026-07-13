@@ -32,7 +32,9 @@ import atexit
 import socket
 import webbrowser
 import hashlib
+import hmac
 import secrets
+from pathlib import Path
 from datetime import timedelta
 from src.utils.console import print_status
 from src.avatar_manager import avatar_manager  # 导入角色设定管理器
@@ -116,6 +118,26 @@ def get_available_avatars() -> List[str]:
                 avatars.append(f"data/avatars/{item}")
     
     return avatars
+
+
+def get_avatar_file(avatar_name: str) -> Path:
+    """Resolve an avatar file without allowing traversal outside the avatar root."""
+    if not isinstance(avatar_name, str) or not avatar_name.strip():
+        raise ValueError("无效的人设名称")
+    if avatar_name in {".", ".."} or "/" in avatar_name or "\\" in avatar_name or "\x00" in avatar_name:
+        raise ValueError("无效的人设名称")
+
+    avatar_root = (Path(ROOT_DIR) / "data" / "avatars").resolve()
+    # Return a path obtained from trusted directory enumeration. The request value
+    # is only used as an exact lookup key and is never joined into a filesystem path.
+    known_avatars = {
+        child.name: child / "avatar.md"
+        for child in avatar_root.iterdir()
+        if child.is_dir()
+    }
+    if avatar_name not in known_avatars:
+        raise ValueError("人设不存在")
+    return known_avatars[avatar_name]
 
 def parse_config_groups() -> Dict[str, Dict[str, Any]]:
     """解析配置文件，将配置项按组分类"""
@@ -1031,12 +1053,7 @@ start - 启动机器人
 stop - 停止机器人
 restart - 重启机器人
 
-支持所有CMD命令，例如:
-dir - 显示目录内容
-cd - 切换目录
-echo - 显示消息
-type - 显示文件内容
-等...'''
+出于安全考虑，控制台只接受以上内置命令。'''
             })
             
         elif command.lower() == 'clear':
@@ -1239,46 +1256,12 @@ type - 显示文件内容
                     'error': f'重启失败: {str(e)}'
                 })
             
-        # 执行CMD命令
+        # 拒绝执行任意系统命令，避免 Web 控制台变成远程命令执行入口。
         else:
-            try:
-                # 使用subprocess执行命令并捕获输出
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    encoding='utf-8',
-                    errors='replace'
-                )
-                
-                # 获取命令输出
-                stdout, stderr = process.communicate(timeout=30)
-                
-                # 如果有错误输出
-                if stderr:
-                    return jsonify({
-                        'status': 'error',
-                        'error': stderr
-                    })
-                    
-                # 返回命令执行结果
-                return jsonify({
-                    'status': 'success',
-                    'output': stdout or '命令执行成功，无输出'
-                })
-                
-            except subprocess.TimeoutExpired:
-                process.kill()
-                return jsonify({
-                    'status': 'error',
-                    'error': '命令执行超时'
-                })
-            except Exception as e:
-                return jsonify({
-                    'status': 'error',
-                    'error': f'执行命令失败: {str(e)}'
-                })
+            return jsonify({
+                'status': 'error',
+                'error': '不支持的命令。请输入 help 查看可用命令。'
+            }), 400
             
     except Exception as e:
         return jsonify({
@@ -1546,7 +1529,7 @@ def main():
     app.run(
         host=host, 
         port=port, 
-        debug=True,
+        debug=False,
         use_reloader=False  # 禁用重载器以避免创建多余的进程
     )
 
@@ -1594,8 +1577,37 @@ def install_dependencies():
         })
 
 def hash_password(password: str) -> str:
-    # 对密码进行哈希处理
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash an administrator password with a unique salt and scrypt."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+    )
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> tuple[bool, str | None]:
+    """Verify current hashes and transparently upgrade legacy SHA-256 hashes."""
+    if stored_hash.startswith("scrypt$"):
+        try:
+            _, salt_hex, digest_hex = stored_hash.split("$", 2)
+            candidate = hashlib.scrypt(
+                password.encode("utf-8"),
+                salt=bytes.fromhex(salt_hex),
+                n=2**14,
+                r=8,
+                p=1,
+                dklen=32,
+            )
+            return hmac.compare_digest(candidate.hex(), digest_hex), None
+        except (ValueError, TypeError):
+            return False, None
+
+    # Legacy verification is intentionally retained only to migrate a successful
+    # login immediately to scrypt; new passwords never use SHA-256.
+    legacy = hashlib.sha256(password.encode("utf-8")).hexdigest()  # lgtm[py/weak-sensitive-data-hashing]
+    if hmac.compare_digest(legacy, stored_hash):
+        return True, hash_password(password)
+    return False, None
 
 def is_local_network() -> bool:
     # 检查是否是本地网络访问
@@ -1620,11 +1632,6 @@ def check_auth():
     if not config.auth.admin_password:
         return redirect(url_for('init_password'))
         
-    # 如果是本地网络访问，自动登录
-    if is_local_network():
-        session['logged_in'] = True
-        return
-        
     if not session.get('logged_in'):
         return redirect(url_for('login'))
 
@@ -1642,11 +1649,6 @@ def login():
         if session.get('logged_in'):
             return redirect(url_for('dashboard'))
             
-        # 如果是本地网络访问，自动登录并重定向到仪表盘
-        if is_local_network():
-            session['logged_in'] = True
-            return redirect(url_for('dashboard'))
-            
         return render_template('login.html')
     
     # POST请求处理
@@ -1656,7 +1658,10 @@ def login():
     
     # 正常登录验证
     stored_hash = config.auth.admin_password
-    if hash_password(password) == stored_hash:
+    password_valid, upgraded_hash = verify_password(password, stored_hash)
+    if password_valid:
+        if upgraded_hash:
+            config.update_password(upgraded_hash)
         session.clear()  # 清除旧会话
         session['logged_in'] = True
         if remember_me:
@@ -1896,10 +1901,10 @@ def save_avatar():
         if 'avatar' in avatar_data:
             del avatar_data['avatar']
         
-        avatar_path = os.path.join(ROOT_DIR, 'data', 'avatars', avatar_name, 'avatar.md')
+        avatar_path = get_avatar_file(avatar_name)
         
         # 确保目录存在
-        os.makedirs(os.path.dirname(avatar_path), exist_ok=True)
+        avatar_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(avatar_path, 'w', encoding='utf-8') as file:
             for key, value in avatar_data.items():
@@ -1934,10 +1939,10 @@ def load_avatar_content():
     """加载指定人设的内容"""
     try:
         avatar_name = request.args.get('avatar', 'MONO')
-        avatar_path = os.path.join(ROOT_DIR, 'data', 'avatars', avatar_name, 'avatar.md')
+        avatar_path = get_avatar_file(avatar_name)
         
         # 确保目录存在
-        os.makedirs(os.path.dirname(avatar_path), exist_ok=True)
+        avatar_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 如果文件不存在，创建一个空文件
         if not os.path.exists(avatar_path):

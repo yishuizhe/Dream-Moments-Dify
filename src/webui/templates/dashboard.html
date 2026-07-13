@@ -31,7 +31,7 @@
     <meta name="theme-color" content="#6366f1">
 
     <!-- Umami -->
-    <script defer src="http://umami.kourichat.com/script.js" data-website-id="319cc5bc-c057-4f6c-8bc4-4af5e110add1"></script>
+    <script defer src="https://umami.kourichat.com/script.js" data-website-id="319cc5bc-c057-4f6c-8bc4-4af5e110add1"></script>
 
     <!-- Favicon -->
     <link rel="icon" type="image/x-icon" href="/static/mom.ico">
@@ -1225,7 +1225,10 @@
                     // 显示检查结果
                     const outputLine = document.createElement('div');
                     outputLine.className = 'log-line';
-                    outputLine.innerHTML = `<span class="command-output">${data.console_output}</span>`;
+                    const outputSpan = document.createElement('span');
+                    outputSpan.className = 'command-output';
+                    outputSpan.textContent = data.console_output;
+                    outputLine.appendChild(outputSpan);
                     logsElement.appendChild(outputLine);
                     
                     if (data.has_update && data.wait_input) {
@@ -1244,7 +1247,10 @@
                                 // 显示用户输入
                                 const inputLine = document.createElement('div');
                                 inputLine.className = 'log-line';
-                                inputLine.innerHTML = `<span class="command-output">${choice}</span>`;
+                                const inputSpan = document.createElement('span');
+                                inputSpan.className = 'command-output';
+                                inputSpan.textContent = choice;
+                                inputLine.appendChild(inputSpan);
                                 logsElement.appendChild(inputLine);
                                 
                                 // 发送用户选择
@@ -1260,7 +1266,10 @@
                                     // 显示更新过程输出
                                     const resultLine = document.createElement('div');
                                     resultLine.className = 'log-line';
-                                    resultLine.innerHTML = `<span class="command-${result.status}">${result.console_output}</span>`;
+                                    const resultSpan = document.createElement('span');
+                                    resultSpan.className = result.status === 'success' ? 'command-success' : 'command-error';
+                                    resultSpan.textContent = result.console_output;
+                                    resultLine.appendChild(resultSpan);
                                     logsElement.appendChild(resultLine);
                                 })
                                 .catch(error => {
@@ -1475,7 +1484,10 @@
                     const logsElement = document.querySelector('.logs');
                     const commandLine = document.createElement('div');
                     commandLine.className = 'log-line';
-                    commandLine.innerHTML = `<span class="command-input">$ ${command}</span>`;
+                    const commandSpan = document.createElement('span');
+                    commandSpan.className = 'command-input';
+                    commandSpan.textContent = `$ ${command}`;
+                    commandLine.appendChild(commandSpan);
                     logsElement.appendChild(commandLine);
                     
                     // 执行命令
@@ -1512,9 +1524,15 @@
                 outputLine.className = 'log-line';
                 
                 if (data.status === 'success') {
-                    outputLine.innerHTML = `<span class="command-output">${data.output}</span>`;
+                    const outputSpan = document.createElement('span');
+                    outputSpan.className = 'command-output';
+                    outputSpan.textContent = data.output;
+                    outputLine.appendChild(outputSpan);
                 } else {
-                    outputLine.innerHTML = `<span class="command-error">${data.error}</span>`;
+                    const errorSpan = document.createElement('span');
+                    errorSpan.className = 'command-error';
+                    errorSpan.textContent = data.error;
+                    outputLine.appendChild(errorSpan);
                 }
                 
                 logsElement.appendChild(outputLine);

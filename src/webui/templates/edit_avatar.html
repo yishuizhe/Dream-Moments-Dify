@@ -515,17 +515,19 @@
                 const toast = document.createElement('div');
                 toast.className = 'toast-container position-fixed top-0 start-50 translate-middle-x p-3';
                 toast.innerHTML = `
-                    <div class="toast align-items-center text-white bg-${type === 'success' ? 'success' : 'danger'} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+                    <div class="toast align-items-center text-white border-0" role="alert" aria-live="assertive" aria-atomic="true">
                         <div class="d-flex">
-                            <div class="toast-body">
-                                <i class="bi bi-${type === 'success' ? 'check-circle' : 'x-circle'} me-2"></i>${message}
-                            </div>
+                            <div class="toast-body"><i class="bi me-2"></i><span></span></div>
                             <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
                         </div>
                     </div>
                 `;
                 document.body.appendChild(toast);
                 const toastEl = toast.querySelector('.toast');
+                const isSuccess = type === 'success';
+                toastEl.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
+                toastEl.querySelector('i').classList.add(isSuccess ? 'bi-check-circle' : 'bi-x-circle');
+                toastEl.querySelector('.toast-body span').textContent = message;
                 const bsToast = new bootstrap.Toast(toastEl, {
                     delay: 3000
                 });
