@@ -631,7 +631,7 @@ def save():
         logger.error(f"保存失败: {str(e)}")
         return jsonify({
             "status": "error", 
-            "message": f"保存失败: {str(e)}",
+            "message": "保存失败，请查看服务日志",
             "title": "错误"
         })
 
@@ -683,7 +683,7 @@ def get_background():
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": "读取背景设置失败"
         })
 
 # 添加新的路由
@@ -755,7 +755,7 @@ def system_info():
         logger.error(f"获取系统信息失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '获取系统信息失败'
         }), 500
 
 @app.route('/check_update')
@@ -776,7 +776,7 @@ def check_update():
         return jsonify({
             'status': 'error',
             'has_update': False,
-            'console_output': f'检查更新失败: {str(e)}'
+            'console_output': '检查更新失败，请查看服务日志'
         })
 
 @app.route('/confirm_update', methods=['POST'])
@@ -800,7 +800,7 @@ def confirm_update():
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'console_output': f'更新失败: {str(e)}'
+            'console_output': '更新失败，请查看服务日志'
         })
 
 @app.route('/start_bot')
@@ -878,7 +878,7 @@ def start_bot():
         logger.error(f"启动机器人失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '启动机器人失败'
         })
 
 @app.route('/get_bot_logs')
@@ -958,7 +958,7 @@ def stop_bot():
         logger.error(f"停止机器人失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '停止机器人失败'
         })
 
 @app.route('/config')
@@ -1023,7 +1023,7 @@ def get_user_info():
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'message': f"获取用户信息失败: {str(e)}"
+            'message': '获取用户信息失败'
         })
 
 # 在 app 初始化后添加
@@ -1182,7 +1182,7 @@ restart - 重启机器人
                 except Exception as e:
                     return jsonify({
                         'status': 'error',
-                        'error': f'停止失败: {str(e)}'
+                        'error': '停止失败，请查看服务日志'
                     })
             else:
                 return jsonify({
@@ -1210,7 +1210,7 @@ restart - 重启机器人
                 except Exception as e:
                     return jsonify({
                         'status': 'error',
-                        'error': f'重启失败: {str(e)}'
+                        'error': '重启失败，请查看服务日志'
                     })
             
             time.sleep(2)  # 等待进程完全停止
@@ -1253,7 +1253,7 @@ restart - 重启机器人
             except Exception as e:
                 return jsonify({
                     'status': 'error',
-                    'error': f'重启失败: {str(e)}'
+                    'error': '重启失败，请查看服务日志'
                 })
             
         # 拒绝执行任意系统命令，避免 Web 控制台变成远程命令执行入口。
@@ -1266,7 +1266,7 @@ restart - 重启机器人
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'error': f'执行命令失败: {str(e)}'
+            'error': '执行命令失败，请查看服务日志'
         })
 
 @app.route('/check_dependencies')
@@ -1356,7 +1356,7 @@ def check_dependencies():
         logger.error(f"依赖检查失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '依赖检查失败'
         })
 
 @app.route('/favicon.ico')
@@ -1573,7 +1573,7 @@ def install_dependencies():
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '依赖安装失败，请查看服务日志'
         })
 
 def hash_password(password: str) -> str:
@@ -1731,7 +1731,7 @@ def init_password():
         logger.error(f"初始化密码失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '初始化密码失败，请查看服务日志'
         }), 500
 
 @app.route('/logout')
@@ -1793,7 +1793,7 @@ def get_model_configs():
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '读取配置失败'
         })
 
 @app.route('/save_quick_setup', methods=['POST'])
@@ -1837,7 +1837,7 @@ def save_quick_setup():
             return jsonify({"status": "error", "message": "保存失败"})
             
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({"status": "error", "message": "保存设置失败，请查看服务日志"})
 
 @app.route('/quick_setup')
 def quick_setup():
@@ -1887,7 +1887,7 @@ def load_avatar():
         logger.error(f"加载角色设定失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '加载角色设定失败'
         })
 
 @app.route('/save_avatar', methods=['POST'])
@@ -1914,7 +1914,7 @@ def save_avatar():
         return jsonify({"status": "success", "message": "角色设定已保存"})
     except Exception as e:
         logger.error(f"保存角色设定失败: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({"status": "error", "message": "保存角色设定失败"})
 
 # 添加获取可用人设列表的路由
 @app.route('/get_available_avatars')
@@ -1930,7 +1930,7 @@ def get_available_avatars_route():
         logger.error(f"获取人设列表失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '获取人设列表失败'
         })
 
 # 修改加载指定人设内容的路由
@@ -1983,7 +1983,7 @@ def load_avatar_content():
         logger.error(f"加载人设内容失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': '加载人设内容失败'
         })
 
 if __name__ == '__main__':
