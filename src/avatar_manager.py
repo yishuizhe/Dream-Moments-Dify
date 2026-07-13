@@ -56,7 +56,7 @@ def load_avatar():
 
     except Exception as e:
         print(f"读取文件错误: {e}")  # 调试信息
-        return jsonify({'status': 'error', 'message': str(e)})
+        return jsonify({'status': 'error', 'message': '读取角色设定失败'})
 
 @avatar_manager.route('/save_avatar', methods=['POST'])
 def save_avatar():
