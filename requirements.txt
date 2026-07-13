@@ -14,7 +14,7 @@ Pillow>=10.0.0
 psutil>=5.9.0
 
 # Web configuration UI
-Flask>=3.0.0
+Flask>=3.1.3
 
 # Existing text/data handlers
 jieba>=0.42.1
