@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import hashlib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,33 @@ from src.config import config
 
 
 class WebConfigTests(unittest.TestCase):
+    def test_password_hashes_are_salted_and_legacy_hashes_upgrade(self):
+        first = run_config_web.hash_password("correct horse battery staple")
+        second = run_config_web.hash_password("correct horse battery staple")
+
+        self.assertTrue(first.startswith("scrypt$"))
+        self.assertNotEqual(first, second)
+        self.assertEqual(
+            run_config_web.verify_password("correct horse battery staple", first),
+            (True, None),
+        )
+        self.assertEqual(run_config_web.verify_password("wrong", first), (False, None))
+
+        legacy = hashlib.sha256(b"legacy-password").hexdigest()
+        valid, upgraded = run_config_web.verify_password("legacy-password", legacy)
+        self.assertTrue(valid)
+        self.assertIsNotNone(upgraded)
+        self.assertTrue(upgraded.startswith("scrypt$"))
+
+    def test_avatar_paths_cannot_escape_avatar_directory(self):
+        safe = run_config_web.get_avatar_file("MONO")
+        self.assertEqual(safe.name, "avatar.md")
+        self.assertEqual(safe.parent.name, "MONO")
+
+        for unsafe in ("../config", "..", "nested/avatar", "nested\\avatar", ""):
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                run_config_web.get_avatar_file(unsafe)
+
     def test_polling_settings_are_exposed_and_saved(self):
         groups = run_config_web.parse_config_groups()
         self.assertIn("微信轮询配置", groups)
