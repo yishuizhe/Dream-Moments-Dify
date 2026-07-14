@@ -46,6 +46,9 @@ class WebConfigTests(unittest.TestCase):
         groups = run_config_web.parse_config_groups()
         self.assertIn("微信轮询配置", groups)
         self.assertIn("WECHAT_POLL_INTERVAL", groups["微信轮询配置"])
+        self.assertIn("图像生成配置", groups)
+        for key in ("IMAGE_ENABLED", "IMAGE_API_KEY", "IMAGE_BASE_URL", "IMAGE_MODEL"):
+            self.assertIn(key, groups["图像生成配置"])
 
         submitted = {
             "LISTEN_LIST": ["好友"],
@@ -58,6 +61,11 @@ class WebConfigTests(unittest.TestCase):
             "TEMPERATURE": 0.8,
             "DIFY_API_KEY": "test-key",
             "DIFY_BASE_URL": "https://api.dify.ai/v1/",
+            "IMAGE_ENABLED": "true",
+            "IMAGE_API_KEY": "image-test-key",
+            "IMAGE_BASE_URL": "https://images.example.test/v1/",
+            "IMAGE_MODEL": "example-image-model",
+            "TEMP_IMAGE_DIR": "data/images/generated",
         }
 
         with patch.object(config, "save_config", return_value=True) as save_mock, patch(
@@ -85,6 +93,13 @@ class WebConfigTests(unittest.TestCase):
         self.assertEqual(llm["model"]["value"], "deepseek-chat")
         self.assertEqual(llm["max_tokens"]["value"], 4096)
         self.assertEqual(llm["temperature"]["value"], 0.8)
+
+        image = payload["categories"]["media_settings"]["settings"]["image_generation"]
+        self.assertTrue(image["enabled"]["value"])
+        self.assertEqual(image["api_key"]["value"], "image-test-key")
+        self.assertEqual(image["base_url"]["value"], "https://images.example.test/v1/")
+        self.assertEqual(image["model"]["value"], "example-image-model")
+        self.assertEqual(image["temp_dir"]["value"], "data/images/generated")
 
 
 if __name__ == "__main__":

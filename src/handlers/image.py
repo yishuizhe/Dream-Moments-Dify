@@ -8,6 +8,7 @@
 """
 
 import os
+import base64
 import logging
 import requests
 from datetime import datetime
@@ -19,12 +20,30 @@ from services.ai.deepseek import DeepSeekAI
 logger = logging.getLogger(__name__)
 
 class ImageHandler:
-    def __init__(self, root_dir, api_key, base_url, image_model):
+    def __init__(
+        self,
+        root_dir,
+        api_key="",
+        base_url="",
+        image_model="",
+        *,
+        text_model="deepseek-chat",
+        image_enabled=False,
+        image_api_key="",
+        image_base_url="",
+        temp_dir="data/images/temp",
+    ):
         self.root_dir = root_dir
-        self.api_key = api_key
-        self.base_url = base_url
-        self.image_model = image_model
-        self.temp_dir = os.path.join(root_dir, "data", "images", "temp")
+        # Text LLM is used only to optimize prompts. Image generation has its own provider.
+        self.text_api_key = str(api_key or "").strip()
+        self.text_base_url = str(base_url or "").strip()
+        self.text_model = str(text_model or "deepseek-chat").strip()
+        self.image_enabled = bool(image_enabled)
+        self.image_api_key = str(image_api_key or "").strip()
+        self.image_base_url = str(image_base_url or "").strip().rstrip("/")
+        self.image_model = str(image_model or "").strip()
+        self.temp_dir = os.path.join(root_dir, temp_dir)
+        self.last_error = ""
         
         # Image prompt optimization is optional for Dify-only deployments.
         # Create the OpenAI-compatible client only when an image feature needs it.
@@ -90,14 +109,14 @@ class ImageHandler:
 
     def _get_text_ai(self) -> DeepSeekAI:
         if self.text_ai is None:
-            if not self.api_key or not self.base_url:
+            if not self.text_api_key or not self.text_base_url:
                 raise RuntimeError(
                     "Image prompt optimization requires llm_settings.api_key and base_url"
                 )
             self.text_ai = DeepSeekAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                model="deepseek-ai/DeepSeek-V3",
+                api_key=self.text_api_key,
+                base_url=self.text_base_url,
+                model=self.text_model,
                 max_token=2048,
                 temperature=0.5,
                 max_groups=15,
@@ -306,68 +325,106 @@ class ImageHandler:
             return self.quality_profiles['standard']
         return self.quality_profiles['fast']
 
+    def _validate_image_provider(self) -> bool:
+        """Validate independent image provider settings before any network call."""
+        self.last_error = ""
+        if not self.image_enabled:
+            self.last_error = "画图功能尚未启用，请先配置独立图像生成 API。"
+            return False
+        if not self.image_api_key or not self.image_base_url or not self.image_model:
+            self.last_error = "画图功能配置不完整，请填写图像 API Key、Base URL 和模型名称。"
+            return False
+        if "api.deepseek.com" in self.image_base_url.lower():
+            self.last_error = "DeepSeek 文本 API 不提供图片生成接口，请配置独立图像生成服务。"
+            return False
+        return True
+
+    def get_unavailable_message(self) -> str:
+        return self.last_error or "图片生成失败，请检查图像生成服务配置。"
+
+    def _save_image_bytes(self, content: bytes, suffix: str = ".png") -> str:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        temp_path = os.path.join(self.temp_dir, f"image_{timestamp}{suffix}")
+        with open(temp_path, "wb") as file:
+            file.write(content)
+        logger.info("图片已保存到临时目录")
+        return temp_path
+
     def generate_image(self, prompt: str) -> Optional[str]:
-        """整合版图像生成方法"""
+        """Use an independently configured OpenAI-compatible image provider."""
+        if not self._validate_image_provider():
+            logger.warning(self.last_error)
+            return None
+
         try:
-            # 自动扩展短提示词
-            if len(prompt) <= self.prompt_extend_threshold:
-                prompt = self._expand_prompt(prompt)
-            
-            # 多阶段提示词优化
-            optimized_prompt, strategy = self._optimize_prompt(prompt)
-            logger.info(f"优化策略: {strategy}, 优化后提示词: {optimized_prompt}")
-            
-            # 构建负面提示词
+            original_prompt = str(prompt or "").strip()
+            if not original_prompt:
+                self.last_error = "画图描述不能为空。"
+                return None
+
+            if len(original_prompt) <= self.prompt_extend_threshold:
+                original_prompt = self._expand_prompt(original_prompt)
+
+            optimized_prompt, strategy = self._optimize_prompt(original_prompt)
+            optimized_prompt = str(optimized_prompt or original_prompt).strip() or original_prompt
+            logger.info("图像提示词优化策略: %s", strategy)
+
             negative_prompt = self._build_final_negatives(optimized_prompt)
-            logger.info(f"最终负面提示词: {negative_prompt}")
-            
-            # 质量配置选择
             quality_config = self._select_quality_profile(optimized_prompt)
-            logger.info(f"质量配置: {quality_config}")
-            
-            # 构建请求参数
             headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+                "Authorization": f"Bearer {self.image_api_key}",
+                "Content-Type": "application/json",
             }
-            
             payload = {
                 "model": self.image_model,
                 "prompt": f"masterpiece, best quality, {optimized_prompt}",
                 "negative_prompt": negative_prompt,
                 "steps": quality_config['steps'],
                 "width": quality_config['width'],
-                "height": quality_config['width'],  # 保持方形比例
+                "height": quality_config['width'],
                 "guidance_scale": 7.5,
-                "seed": int(time.time() % 1000)  # 添加随机种子
+                "seed": int(time.time() % 100000),
+                "response_format": "url",
             }
-            
-            # 调用生成API
             response = requests.post(
-                f"{self.base_url}/images/generations",
+                f"{self.image_base_url}/images/generations",
                 headers=headers,
                 json=payload,
-                timeout=45
+                timeout=60,
             )
-            response.raise_for_status()
-            
-            # 结果处理
+            try:
+                response.raise_for_status()
+            except requests.HTTPError:
+                detail = response.text[:500] if response.text else ""
+                self.last_error = f"图像生成服务返回 HTTP {response.status_code}。"
+                logger.error("图像生成 API 失败: HTTP %s %s", response.status_code, detail)
+                return None
+
             result = response.json()
-            if "data" in result and len(result["data"]) > 0:
-                img_url = result["data"][0]["url"]
-                img_response = requests.get(img_url)
-                if img_response.status_code == 200:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    temp_path = os.path.join(self.temp_dir, f"image_{timestamp}.jpg")
-                    with open(temp_path, "wb") as f:
-                        f.write(img_response.content)
-                    logger.info(f"图片已保存到: {temp_path}")
-                    return temp_path
-            logger.error("API返回的数据中没有图片URL")
+            data = result.get("data") or []
+            if not data:
+                self.last_error = "图像生成服务没有返回图片数据。"
+                logger.error(self.last_error)
+                return None
+
+            first = data[0] or {}
+            if first.get("b64_json"):
+                return self._save_image_bytes(base64.b64decode(first["b64_json"]))
+
+            image_url = first.get("url")
+            if image_url:
+                image_response = requests.get(image_url, timeout=60)
+                image_response.raise_for_status()
+                content_type = image_response.headers.get("Content-Type", "").lower()
+                suffix = ".jpg" if "jpeg" in content_type else ".png"
+                return self._save_image_bytes(image_response.content, suffix=suffix)
+
+            self.last_error = "图像生成服务返回结果中既没有 URL，也没有 base64 图片。"
+            logger.error(self.last_error)
             return None
-            
-        except Exception as e:
-            logger.error(f"图像生成失败: {str(e)}")
+        except Exception as exc:
+            self.last_error = "图片生成失败，请稍后重试或检查图像服务配置。"
+            logger.error("图像生成失败: %s", str(exc), exc_info=True)
             return None
 
     def cleanup_temp_dir(self):

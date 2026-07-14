@@ -55,8 +55,11 @@ class ImageRecognitionSettings:
 
 @dataclass
 class ImageGenerationSettings:
-    model: str
-    temp_dir: str
+    enabled: bool = False
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    temp_dir: str = "data/images/temp"
 
 @dataclass
 class TextToSpeechSettings:
@@ -233,8 +236,24 @@ class Config:
                         temperature=media_data['image_recognition']['temperature']['value']
                     ),
                     image_generation=ImageGenerationSettings(
-                        model=media_data['image_generation']['model']['value'],
-                        temp_dir=media_data['image_generation']['temp_dir']['value']
+                        enabled=_as_bool(
+                            media_data.get('image_generation', {}).get('enabled', {}).get('value', False),
+                            default=False,
+                        ),
+                        api_key=str(
+                            media_data.get('image_generation', {}).get('api_key', {}).get('value', '')
+                        ).strip(),
+                        base_url=str(
+                            media_data.get('image_generation', {}).get('base_url', {}).get('value', '')
+                        ).strip(),
+                        model=str(
+                            media_data.get('image_generation', {}).get('model', {}).get('value', '')
+                        ).strip(),
+                        temp_dir=str(
+                            media_data.get('image_generation', {}).get('temp_dir', {}).get(
+                                'value', 'data/images/temp'
+                            )
+                        ).strip() or 'data/images/temp',
                     ),
                     text_to_speech=TextToSpeechSettings(
                         tts_api_url=media_data['text_to_speech']['tts_api_url']['value'],

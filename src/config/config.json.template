@@ -48,6 +48,10 @@
                     "type": "string",
                     "description": "使用的AI模型名称",
                     "options": [
+                        "deepseek-chat",
+                        "deepseek-reasoner",
+                        "deepseek-v4-pro",
+                        "deepseek-v4-flash",
                         "deepseek-ai/DeepSeek-V3",
                         "Pro/deepseek-ai/DeepSeek-V3",
                         "Pro/deepseek-ai/DeepSeek-R1"
@@ -102,10 +106,26 @@
                     }
                 },
                 "image_generation": {
+                    "enabled": {
+                        "value": false,
+                        "type": "boolean",
+                        "description": "是否启用独立图像生成 API"
+                    },
+                    "api_key": {
+                        "value": "",
+                        "type": "string",
+                        "description": "图像生成 API 密钥（不要填写 DeepSeek 文本 API 密钥）",
+                        "is_secret": true
+                    },
+                    "base_url": {
+                        "value": "",
+                        "type": "string",
+                        "description": "OpenAI 兼容图像生成 API 基础 URL，例如服务商的 /v1 地址"
+                    },
                     "model": {
                         "value": "deepseek-ai/Janus-Pro-7B",
                         "type": "string",
-                        "description": "图像生成模型"
+                        "description": "图像生成服务实际支持的模型名称"
                     },
                     "temp_dir": {
                         "value": "data/images/temp",

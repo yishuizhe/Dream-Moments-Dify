@@ -231,6 +231,19 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
     # 图像生成配置
     config_groups["图像生成配置"].update(
         {
+            "IMAGE_ENABLED": {
+                "value": config.media.image_generation.enabled,
+                "description": "是否启用独立图像生成 API",
+            },
+            "IMAGE_API_KEY": {
+                "value": config.media.image_generation.api_key,
+                "description": "图像生成 API 密钥",
+                "is_secret": True,
+            },
+            "IMAGE_BASE_URL": {
+                "value": config.media.image_generation.base_url,
+                "description": "图像生成 API 基础 URL",
+            },
             "IMAGE_MODEL": {
                 "value": config.media.image_generation.model,
                 "description": "图像生成模型",
@@ -360,8 +373,11 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                 temperature=float(new_config.get("MOONSHOT_TEMPERATURE", 1.1)),
             ),
             image_generation=ImageGenerationSettings(
-                model=new_config.get("IMAGE_MODEL", ""),
-                temp_dir=new_config.get("TEMP_IMAGE_DIR", ""),
+                enabled=parse_bool(new_config.get("IMAGE_ENABLED", False)),
+                api_key=str(new_config.get("IMAGE_API_KEY", "") or "").strip(),
+                base_url=str(new_config.get("IMAGE_BASE_URL", "") or "").strip(),
+                model=str(new_config.get("IMAGE_MODEL", "") or "").strip(),
+                temp_dir=str(new_config.get("TEMP_IMAGE_DIR", "data/images/temp") or "data/images/temp").strip(),
             ),
             text_to_speech=TextToSpeechSettings(
                 tts_api_url=new_config.get("TTS_API_URL", ""),
@@ -509,6 +525,22 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                             },
                         },
                         "image_generation": {
+                            "enabled": {
+                                "value": media_settings.image_generation.enabled,
+                                "type": "boolean",
+                                "description": "是否启用独立图像生成 API",
+                            },
+                            "api_key": {
+                                "value": media_settings.image_generation.api_key,
+                                "type": "string",
+                                "description": "图像生成 API 密钥",
+                                "is_secret": True,
+                            },
+                            "base_url": {
+                                "value": media_settings.image_generation.base_url,
+                                "type": "string",
+                                "description": "图像生成 API 基础 URL",
+                            },
                             "model": {
                                 "value": media_settings.image_generation.model,
                                 "type": "string",
@@ -1094,7 +1126,7 @@ restart - 重启机器人
         elif command.lower() == 'version':
             return jsonify({
                 'status': 'success',
-                'output': 'Dream-Moments-Dify v1.5.1'
+                'output': 'Dream-Moments-Dify v1.6.0'
             })
             
         elif command.lower() == 'memory':

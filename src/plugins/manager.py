@@ -84,6 +84,21 @@ class PluginManager:
         name = str(getattr(instance, "name", plugin_dir.name) or plugin_dir.name)
         return LoadedPlugin(name=name, instance=instance, module=module, directory=plugin_dir)
 
+    def configure_services(self, **services: Any) -> None:
+        """Inject optional core services into plugins that explicitly accept them."""
+        for loaded in self.plugins:
+            configure = getattr(loaded.instance, "configure_services", None)
+            if not callable(configure):
+                continue
+            try:
+                configure(**services)
+            except Exception as exc:
+                self.logger.error(
+                    "External plugin %s service configuration failed (%s)",
+                    loaded.name,
+                    type(exc).__name__,
+                )
+
     def handle_group_message(
         self,
         *,

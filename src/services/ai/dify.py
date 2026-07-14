@@ -1,10 +1,20 @@
 import logging
 import json
 import requests
+import re
 from typing import Dict, List
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_log_text(value: str, limit: int = 800) -> str:
+    """Redact common API-key shapes before writing provider errors to disk."""
+    text = str(value or "")[: max(0, int(limit))]
+    text = re.sub(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?bearer\s+)[^\s\"']+", r"\1***", text)
+    text = re.sub(r"(?i)\b(?:sk|app|ak)-[A-Za-z0-9_-]{8,}\b", "***", text)
+    text = re.sub(r"(?i)(api[_-]?key[\"']?\s*[:=]\s*[\"']?)[^\s,}\"']+", r"\1***", text)
+    return text
 
 class DifyAI:
     def __init__(self, dify_api_key: str, dify_base_url: str, max_groups: int):
@@ -72,12 +82,8 @@ class DifyAI:
 
 
                 if response.status_code != 200:
-                    logger.error(f"当前使用的 API URL: {request_url}")
-                    logger.error(f"请求头: {self.headers}")
-                    logger.error(f"请求数据: {json.dumps(data, indent=2, ensure_ascii=False)}")
-
-                    logger.error(f"API请求失败，状态码: {response.status_code}")
-                    logger.error(f"响应内容: {response.text}")
+                    logger.error("Dify API 请求失败: %s (HTTP %s)", request_url, response.status_code)
+                    logger.error("Dify 错误响应: %s", _safe_log_text(response.text))
                     return "抱歉主人，服务响应异常，请稍后再试"
 
                 response_content = response.text.split('data: ')[1] if 'data: ' in response.text else response.text
@@ -93,7 +99,7 @@ class DifyAI:
                         return "抱歉主人，服务响应异常，请稍后再试"
                 except Exception as json_error:
                     logger.error(f"[DEBUG] 解析 JSON 失败: {str(json_error)}")
-                    logger.error(f"[DEBUG] 原始响应内容: {response.text}")
+                    logger.error("Dify 原始响应: %s", _safe_log_text(response.text))
                     return "抱歉主人，服务响应格式异常，请稍后再试"
 
                 self._manage_context(user_id, reply, is_assistant=True)

@@ -200,3 +200,6 @@ data/wechat_poll_state.json.tmp
 # External plugin repositories and runtime data
 /plugins/*
 !/plugins/README.md
+!/plugins/ChatSummary/
+!/plugins/ChatSummary/**
+/plugins/ChatSummary/__pycache__/

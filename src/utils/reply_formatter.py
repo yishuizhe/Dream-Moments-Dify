@@ -12,7 +12,7 @@ FORMAT_INSTRUCTION = f"""
 - 使用正常的中英文标点，不要输出整段没有标点的长句。
 - 日常聊天优先使用简短、自然的句子；问句使用问号，陈述句使用句号或合适的逗号。
 - 不要使用反斜杠作为分段符，程序会自动处理微信气泡分段。
-- 除非用户要求详细说明，单次日常回复尽量控制在 2 到 4 个自然句。
+- 除非用户要求详细说明、教程或总结，单次日常回复默认只用 1 到 2 个短句。
 """.strip("\n")
 
 _SENTENCE_END = "。！？!?；;"
@@ -28,14 +28,38 @@ _TRANSITION_PREFIX_RE = re.compile(
 )
 
 
-def build_system_prompt(system_prompt: str) -> str:
-    """把统一回复格式约束追加到角色提示词末尾。"""
+def build_system_prompt(
+    system_prompt: str,
+    *,
+    is_group: bool = False,
+    task_type: str = "chat",
+    extra_context: str = "",
+) -> str:
+    """Append stable formatting plus scene-specific length and identity rules."""
 
     prompt = str(system_prompt or "").strip()
-    if FORMAT_MARKER in prompt:
-        return prompt
-    return f"{prompt}\n\n{FORMAT_INSTRUCTION}" if prompt else FORMAT_INSTRUCTION
+    parts = [prompt] if prompt else []
+    if FORMAT_MARKER not in prompt:
+        parts.append(FORMAT_INSTRUCTION)
 
+    if task_type == "summary":
+        parts.append(
+            "当前任务是聊天总结，可以使用分点和分段；只根据提供的记录，不要虚构。"
+        )
+    elif is_group:
+        parts.append(
+            "这是群聊。不同昵称代表不同成员，不得把他们当成同一人。"
+            "普通群聊默认只回复 1 个短句，最多 2 句，尽量不超过 45 个中文字；每次最多问一个问题。"
+        )
+    else:
+        parts.append(
+            "普通日常聊天默认只回复 1 到 2 个短句，尽量不超过 60 个中文字。"
+            "除非用户明确要求详细解释、教程或总结，否则不要连续追问，不要重复复述用户的话。"
+        )
+
+    if extra_context:
+        parts.append(str(extra_context).strip())
+    return "\n\n".join(part for part in parts if part)
 
 def normalize_reply_text(reply: str) -> str:
     """清理思考标记、旧反斜杠分隔符，并修复明显无标点长句。"""

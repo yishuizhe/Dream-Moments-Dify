@@ -13,6 +13,9 @@ This project preserves the original attribution and GPLv3 license. It does not b
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
 - Enforces normal punctuation and concise sentences, repairs obvious unpunctuated replies, and automatically splits long replies into natural WeChat bubbles without requiring model backslashes.
 - Group messages can also trigger the bot by quoting a previous bot message, and replies no longer automatically mention the triggering member.
+- Group context preserves member identity; private users and group members have isolated local rolling memory.
+- Bundled `ChatSummary` commands summarize the latest 50/100 group messages or one exact member.
+- Text and image providers are configured independently, preventing invalid DeepSeek `/images/generations` calls.
 - External `plugins/*/dream_plugin.py` support with isolated failures and direct command replies.
 - Emotion-aware animated cat GIFs from Google Noto Emoji Animation.
 - One concise startup banner, WARNING+ console logs, and detailed INFO file logs.
@@ -52,17 +55,45 @@ python run.py
 
 The local `src/config/config.json` is ignored by Git. Never commit API keys, contact names, private prompts, logs, screenshots containing private information, or chat records.
 
+### Image generation
+
+DeepSeek Chat Completions does not provide `/images/generations`. Image generation therefore uses a separate provider configured through `IMAGE_ENABLED`, `IMAGE_API_KEY`, `IMAGE_BASE_URL`, `IMAGE_MODEL`, and optionally `TEMP_IMAGE_DIR`. The service must actually support an OpenAI-compatible image endpoint. Disabled or incomplete settings return a clear configuration message instead of calling `api.deepseek.com` for images; URL and `b64_json` responses are supported.
+
 ## Polling behavior
 
 The first polling round opens whitelisted chats to build message baselines. Later rounds inspect the conversation list without switching chats and only open a chat when its unread count or preview changes. Sending a reply/file still requires foreground UI automation and may briefly change focus.
 
-Group chats can trigger the bot with `@bot-name`, by mentioning the bot name as a standalone name, or by quoting a previous bot message. Quoting another member does not trigger the bot. Replies are sent without automatically mentioning the sender.
+Group chats can trigger the bot with `@bot-name`, by mentioning the bot name as a standalone name, or by quoting a previous bot message. Quoting another member does not trigger the bot. Replies are sent without automatically mentioning the sender. Group context preserves timestamps, sender names, and sender IDs so different members are not treated as one person.
+
+## Per-member local memory
+
+Dream stores a small rolling memory in local `data/database/chat_history.db`:
+
+- private chats are isolated by user;
+- group memories are isolated by group and member;
+- each identity keeps at most 12 candidate items and injects at most the latest 8;
+- likely secrets and memory/summary commands are filtered;
+- send `查看我的记忆` to inspect the current identity memory;
+- send `清除我的记忆` to remove it.
+
+Memory commands in a group still require a normal bot trigger. The SQLite database is ignored by Git and excluded from Releases, but it is plaintext local data and should be protected.
+
+## Built-in chat summaries
+
+The bundled `plugins/ChatSummary` plugin accepts these commands directly in whitelisted groups:
+
+- `总结最近50条`
+- `总结群聊100条`
+- `总结 @张三 最近50条`
+- `总结 张三 最近100条`
+
+Only 50 or 100 messages are accepted. Member-specific summaries use an exact display-name match and run in an isolated AI context.
 
 ## AI reply formatting
 
 A shared formatting rule is appended to character prompts, followed by a send-time safety pass:
 
-- everyday replies favor 2-4 concise sentences with normal punctuation;
+- private-chat replies default to 1-2 short sentences, while group replies are even shorter;
 - obvious long unpunctuated Chinese replies receive conservative punctuation repair;
 - replies are split by paragraphs, sentence boundaries, and length before sending;
 - legacy backslash separators remain compatible, but new character prompts should not request them or prohibit punctuation.
@@ -91,10 +122,10 @@ Bundled GIFs live under `data/avatars/MONO/emojis/{happy,sad,angry,neutral}`. Th
 ```powershell
 python -m unittest discover -s tests -v
 python test.py
-python -m compileall -q src tests run.py run_config_web.py test.py
+python -m compileall -q src tests plugins/ChatSummary run.py run_config_web.py test.py
 ```
 
-Tests cover message deduplication, unread-driven polling, quote triggers, plugin isolation, no automatic group mentions, AI provider switching, reply punctuation repair and bubble splitting, configuration persistence, and the WeChat compatibility layer.
+Tests cover message deduplication, unread-driven polling, quote triggers, group-member identity, local memory, 50/100-message summaries, independent image providers, plugin isolation, no automatic group mentions, AI provider switching, reply punctuation repair and bubble splitting, configuration persistence, and the WeChat compatibility layer.
 
 ## Disclaimer
 

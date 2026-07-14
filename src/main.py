@@ -7,7 +7,7 @@ import threading
 import time
 import os
 import shutil
-from services.database import Session, ChatMessage
+from services.database import HistoryStore, Session, ChatMessage, make_identity_key
 from config import config
 from wechat.adapter import WxAuto4PollingAdapter
 import re
@@ -37,7 +37,14 @@ chat_contexts = {}  # 存储上下文
 init()
 
 class ChatBot:
-    def __init__(self, message_handler, moonshot_ai, wechat, plugin_manager=None):
+    def __init__(
+        self,
+        message_handler,
+        moonshot_ai,
+        wechat,
+        plugin_manager=None,
+        history_store=None,
+    ):
         self.message_handler = message_handler
         self.moonshot_ai = moonshot_ai
         self.user_queues = {}  # 将user_queues移到类的实例变量
@@ -51,37 +58,42 @@ class ChatBot:
             if plugin_manager is not None
             else PluginManager(os.path.join(root_dir, "plugins"), logger=logger)
         )
+        self.history_store = history_store or HistoryStore()
         logger.info(f"机器人名称: {self.robot_name}")
 
     def process_user_messages(self, chat_id):
-        """处理用户消息队列"""
+        """Forward a structured debounce batch to MessageHandler."""
         try:
-            logger.info(f"开始处理消息队列 - 聊天ID: {chat_id}")
-            
             with self.queue_lock:
                 if chat_id not in self.user_queues:
-                    logger.warning(f"未找到消息队列: {chat_id}")
                     return
                 user_data = self.user_queues.pop(chat_id)
-                messages = user_data['messages']
-                sender_name = user_data['sender_name']
-                username = user_data['username']
-                is_group = user_data.get('is_group', False)
-                
-            logger.info(f"队列信息 - 发送者: {sender_name}, 消息数: {len(messages)}, 是否群聊: {is_group}")
-
-            # 处理消息
+            messages = list(user_data.get("message_items") or [])
+            if not messages:
+                raw_messages = list(user_data.get("messages") or [])
+                messages = [{
+                    "content": str(item or ""),
+                    "sender_name": user_data.get("sender_name", ""),
+                    "sender_id": user_data.get("username", ""),
+                    "timestamp": datetime.now(),
+                    "is_group": bool(user_data.get("is_group", False)),
+                } for item in raw_messages]
+            if not messages:
+                return
+            latest = messages[-1]
+            sender_name = str(latest.get("sender_name") or latest.get("sender_id") or "")
+            username = str(latest.get("sender_id") or sender_name)
+            is_group = bool(user_data.get("is_group", False))
             self.message_handler.add_to_queue(
                 chat_id=chat_id,
-                content='\n'.join(messages),
+                content=str(latest.get("content") or ""),
                 sender_name=sender_name,
                 username=username,
-                is_group=is_group
+                is_group=is_group,
+                message_items=messages,
             )
-            logger.info(f"消息已添加到处理队列 - 聊天ID: {chat_id}")
-            
-        except Exception as e:
-            logger.error(f"处理消息队列失败: {str(e)}", exc_info=True)
+        except Exception as exc:
+            logger.error("处理消息队列失败: %s", str(exc), exc_info=True)
 
     def handle_wxauto_message(self, msg, chatName, is_group=False):
         try:
@@ -93,7 +105,28 @@ class ChatBot:
             if not content:
                 logger.warning("消息内容为空，跳过处理")
                 return
-            
+
+            sender_id = str(getattr(msg, "sender_id", None) or username)
+            received_at = getattr(msg, "timestamp", None)
+            if not isinstance(received_at, datetime):
+                received_at = datetime.now()
+            self.history_store.record_message(
+                chat_id=chatName,
+                sender_id=sender_id,
+                sender_name=username,
+                role="user",
+                content=content,
+                is_group=is_group,
+                created_at=received_at,
+            )
+            self.history_store.remember_user_message(
+                identity_key=make_identity_key(chatName, sender_id, is_group),
+                chat_id=chatName,
+                sender_id=sender_id,
+                sender_name=username,
+                content=content,
+            )
+
             img_path = None
             is_emoji = False
             
@@ -102,7 +135,7 @@ class ChatBot:
                 # 外部插件需要观察白名单群的每条文本消息，用于统计和命令处理。
                 plugin_reply = self.plugin_manager.handle_group_message(
                     chat_id=chatName,
-                    sender_id=getattr(msg, 'sender_id', None) or username,
+                    sender_id=sender_id,
                     sender_name=username,
                     content=content,
                     bot_name=self.robot_name or "",
@@ -111,6 +144,14 @@ class ChatBot:
                 )
                 if plugin_reply:
                     self.wx.send_text(chatName, plugin_reply)
+                    self.history_store.record_message(
+                        chat_id=chatName,
+                        sender_id=self.robot_name or "bot",
+                        sender_name=self.robot_name or "AI",
+                        role="assistant",
+                        content=plugin_reply,
+                        is_group=True,
+                    )
                     return
 
                 # 群聊触发需要机器人昵称；引用消息还可通过最近发送文本兼容群昵称。
@@ -165,29 +206,31 @@ class ChatBot:
                 content = recognized_text if content is None else f"{content} {recognized_text}"
 
             sender_name = username
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            time_aware_content = f"[{current_time}] {content}"
+            queue_item = {
+                "content": str(content or ""),
+                "sender_name": sender_name,
+                "sender_id": sender_id,
+                "timestamp": received_at,
+                "is_group": bool(is_group),
+            }
 
-            # 将消息加入队列
             with self.queue_lock:
                 if chatName not in self.user_queues:
-                    logger.info(f"创建新的消息队列 - 聊天ID: {chatName}")
                     self.user_queues[chatName] = {
-                        'timer': threading.Timer(5.0, self.process_user_messages, args=[chatName]),
-                        'messages': [time_aware_content],
-                        'sender_name': sender_name,
-                        'username': username,
-                        'is_group': is_group
+                        "timer": threading.Timer(5.0, self.process_user_messages, args=[chatName]),
+                        "messages": [str(content or "")],
+                        "message_items": [queue_item],
+                        "is_group": bool(is_group),
                     }
-                    self.user_queues[chatName]['timer'].start()
-                    logger.info(f"消息队列创建完成 - 是否群聊: {is_group}, 发送者: {sender_name}")
+                    self.user_queues[chatName]["timer"].start()
                 else:
-                    logger.info(f"更新现有消息队列 - 聊天ID: {chatName}")
-                    self.user_queues[chatName]['timer'].cancel()
-                    self.user_queues[chatName]['messages'].append(time_aware_content)
-                    self.user_queues[chatName]['timer'] = threading.Timer(5.0, self.process_user_messages, args=[chatName])
-                    self.user_queues[chatName]['timer'].start()
-                    logger.info("消息队列更新完成")
+                    queue = self.user_queues[chatName]
+                    queue["timer"].cancel()
+                    queue["messages"].append(str(content or ""))
+                    queue.setdefault("message_items", []).append(queue_item)
+                    queue["is_group"] = bool(is_group)
+                    queue["timer"] = threading.Timer(5.0, self.process_user_messages, args=[chatName])
+                    queue["timer"].start()
 
         except Exception as e:
             logger.error(f"消息处理失败: {str(e)}", exc_info=True)
@@ -217,7 +260,12 @@ image_handler = ImageHandler(
     root_dir=root_dir,
     api_key=config.llm.api_key,
     base_url=config.llm.base_url,
-    image_model=config.media.image_generation.model
+    text_model=config.llm.model,
+    image_enabled=config.media.image_generation.enabled,
+    image_api_key=config.media.image_generation.api_key,
+    image_base_url=config.media.image_generation.base_url,
+    image_model=config.media.image_generation.model,
+    temp_dir=config.media.image_generation.temp_dir,
 )
 voice_handler = VoiceHandler(
     root_dir=root_dir,
@@ -229,6 +277,7 @@ moonshot_ai = MoonShotAI(
     temperature=config.media.image_recognition.temperature
 )
 
+history_store = HistoryStore()
 message_handler = None
 chat_bot = None
 
@@ -260,8 +309,20 @@ def build_runtime() -> None:
         emoji_handler=emoji_handler,
         voice_handler=voice_handler,
         wechat=wechat_adapter,
+        history_store=history_store,
     )
-    chat_bot = ChatBot(message_handler, moonshot_ai, wechat_adapter)
+    plugin_manager = PluginManager(os.path.join(root_dir, "plugins"), logger=logger)
+    plugin_manager.configure_services(
+        history_store=history_store,
+        ai_responder=message_handler.generate_summary_response,
+    )
+    chat_bot = ChatBot(
+        message_handler,
+        moonshot_ai,
+        wechat_adapter,
+        plugin_manager=plugin_manager,
+        history_store=history_store,
+    )
 
 
 wait = wechat_adapter.poll_interval
