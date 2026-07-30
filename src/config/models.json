@@ -1,0 +1,102 @@
+{
+    "version": "1.0.0",
+    "update_url": "https://static.kourichat.com/models/latest.json",
+    "api_providers": [
+        {
+            "id": "kourichat",
+            "name": "KouriChat API",
+            "url": "https://api.kourichat.com/v1",
+            "register_url": "https://api.kourichat.com/",
+            "status": "active",
+            "priority": 2
+        },
+        {
+            "id": "siliconflow",
+            "name": "硅基流动 API",
+            "url": "https://api.siliconflow.cn/v1/",
+            "register_url": "https://www.siliconflow.cn",
+            "status": "active",
+            "priority": 1
+        },
+        {
+            "id": "deepseek",
+            "name": "DeepSeek API",
+            "url": "https://api.deepseek.com/v1",
+            "register_url": "https://platform.deepseek.com",
+            "status": "active", 
+            "priority": 3
+        },
+        {
+            "id": "ollama",
+            "name": "本地 Ollama",
+            "url": "http://localhost:11434/api/chat",
+            "register_url": "https://ollama.ai",
+            "status": "active",
+            "priority": 4
+        }
+    ],
+    "models": {
+        "kourichat": [
+            {
+                "id": "kourichat-v3",
+                "name": "KouriChat V3",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            },
+            {
+                "id": "kourichat-r1",
+                "name": "KouriChat R1",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            }
+        ],
+        "siliconflow": [
+            {
+                "id": "deepseek-ai/DeepSeek-V3",
+                "name": "硅基格式V3模型（免费额度版）",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            },
+            {
+                "id": "deepseek-ai/DeepSeek-R1",
+                "name": "硅基格式R1模型（标准版）",
+                "status": "active", 
+                "type": "chat",
+                "context_length": 16000
+            },
+            {
+                "id": "Pro/deepseek-ai/DeepSeek-V3",
+                "name": "硅基格式V3模型（付费版）",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            },
+            {
+                "id": "Pro/deepseek-ai/DeepSeek-R1",
+                "name": "硅基格式R1模型（付费版）",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            }
+        ],
+        "deepseek": [
+            {
+                "id": "deepseek-chat",
+                "name": "deepseek官方V3模型",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            },
+            {
+                "id": "deepseek-reasoner",
+                "name": "deepseek官方R1模型",
+                "status": "active",
+                "type": "chat",
+                "context_length": 16000
+            }
+        ]
+    }
+} 
