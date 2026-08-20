@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import socket
 import sys
 import tempfile
 import unittest
@@ -55,7 +56,7 @@ class ImageGenerationTests(unittest.TestCase):
                 temp_dir,
                 image_enabled=True,
                 image_api_key="image-key",
-                image_base_url="https://images.example/v1",
+                image_base_url="https://93.184.216.34/v1",
                 image_model="image-model",
             )
             handler._expand_prompt = lambda prompt: prompt
@@ -64,7 +65,76 @@ class ImageGenerationTests(unittest.TestCase):
             path = handler.generate_image("cat")
             self.assertIsNotNone(path)
             self.assertEqual(Path(path).read_bytes(), image_bytes)
-            self.assertEqual(post.call_args.args[0], "https://images.example/v1/images/generations")
+            self.assertEqual(
+                post.call_args.args[0],
+                "https://93.184.216.34/v1/images/generations",
+            )
+            self.assertFalse(post.call_args.kwargs["allow_redirects"])
+
+    def test_private_image_provider_is_rejected_before_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "handlers.image.requests.post"
+        ) as post:
+            handler = ImageHandler(
+                temp_dir,
+                image_enabled=True,
+                image_api_key="image-key",
+                image_base_url="https://127.0.0.1:8443/v1",
+                image_model="image-model",
+            )
+            self.assertIsNone(handler.generate_image("cat"))
+            post.assert_not_called()
+            self.assertIn("私有网络", handler.get_unavailable_message())
+
+    def test_deepseek_lookalike_does_not_match_provider_blocklist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler = ImageHandler(
+                temp_dir,
+                image_enabled=True,
+                image_api_key="image-key",
+                image_base_url="https://api.deepseek.com.evil.example/v1",
+                image_model="image-model",
+            )
+            with patch(
+                "handlers.image.socket.getaddrinfo",
+                return_value=[
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+                ],
+            ):
+                self.assertTrue(handler._validate_image_provider())
+
+    def test_private_image_result_is_rejected_before_download(self):
+        response = Mock(status_code=200)
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": [{"url": "https://127.0.0.1/private.png"}]
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "handlers.image.requests.post", return_value=response
+        ), patch("handlers.image.requests.get") as get:
+            handler = ImageHandler(
+                temp_dir,
+                image_enabled=True,
+                image_api_key="image-key",
+                image_base_url="https://93.184.216.34/v1",
+                image_model="image-model",
+            )
+            handler._expand_prompt = lambda prompt: prompt
+            handler._optimize_prompt = lambda prompt: (prompt, "raw")
+            handler._build_final_negatives = lambda prompt: ""
+            self.assertIsNone(handler.generate_image("cat"))
+            get.assert_not_called()
+
+    def test_image_redirect_to_private_network_is_rejected(self):
+        redirect = Mock(status_code=302)
+        redirect.headers = {"Location": "https://127.0.0.1/private.png"}
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "handlers.image.requests.get", return_value=redirect
+        ) as get:
+            handler = ImageHandler(temp_dir)
+            with self.assertRaisesRegex(ValueError, "私有网络"):
+                handler._download_public_image("https://93.184.216.34/image.png")
+            self.assertEqual(get.call_count, 1)
 
 
 if __name__ == "__main__":
