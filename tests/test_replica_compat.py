@@ -156,7 +156,7 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         )
         self.assertFalse(_safe_ocr_name_matches("小明", "开心摸鱼小分队"))
 
-    def test_text_send_requires_target_and_database_confirmation(self):
+    def test_text_send_requires_target_and_starts_database_audit(self):
         client, _db = self.make_client()
         sender = MagicMock()
         sender.open_chat.return_value = True
@@ -168,14 +168,14 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         client._uia_sender = sender
         client._resolve_username = MagicMock(return_value="room@chatroom")
         client._message_ids = MagicMock(return_value={(1, 1)})
-        client._wait_for_sent_text = MagicMock(return_value=True)
+        client._start_text_delivery_audit = MagicMock()
 
         self.assertTrue(client.SendMsg("你好", "测试群"))
 
         sender.open_chat.assert_called_once_with("测试群", exact=True)
         self.assertEqual(sender._chat_is_open.call_count, 3)
-        client._wait_for_sent_text.assert_called_once_with(
-            "room@chatroom", {(1, 1)}, "你好"
+        client._start_text_delivery_audit.assert_called_once_with(
+            "room@chatroom", {(1, 1)}, "你好", "测试群"
         )
 
     def test_text_send_aborts_if_target_changes_before_enter(self):
