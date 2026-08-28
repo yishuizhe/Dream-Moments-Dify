@@ -84,6 +84,10 @@ class SessionAwareFakeWeChat(FakeWeChat):
         return list(self.sessions)
 
 
+class ReplicaFakeWeChat(SessionAwareFakeWeChat):
+    backend_name = "wechatauto-replica"
+
+
 class RenamedGroupFakeWeChat(FakeWeChat):
     def __init__(self):
         super().__init__({"旧群名": [FakeMessage("成员", "旧消息")]}, {"旧群名": "group"})
@@ -185,6 +189,22 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
 
         self.assertEqual(fake.open_calls, [group])
         self.assertEqual([message.content for message in messages], ["new message"])
+
+    def test_replica_backend_reads_database_when_session_preview_is_stale(self):
+        friend = "好友"
+        fake = ReplicaFakeWeChat(
+            {friend: [FakeMessage(friend, "旧消息")]},
+            [FakeSession(friend, "一直不变的预览", "10:00")],
+        )
+        adapter = self.make_adapter(fake)
+        adapter.poll_once()
+        fake.open_calls.clear()
+
+        fake.chats[friend].append(FakeMessage(friend, "数据库里的新消息"))
+        messages = adapter.poll_once()
+
+        self.assertEqual(fake.open_calls, [friend])
+        self.assertEqual([message.content for message in messages], ["数据库里的新消息"])
 
     def test_first_poll_only_builds_baseline(self):
         fake = FakeWeChat({"好友": [FakeMessage("好友", "旧消息")]})

@@ -375,16 +375,27 @@ class WxAuto4PollingAdapter:
         keep the legacy full polling behavior.
         """
 
-        missing_baselines = [
-            contact for contact in self.contacts if contact not in self._snapshots
-        ]
-        if missing_baselines:
-            contacts_to_read = missing_baselines
+        # The 4.1.12+ replica client reads every chat directly from SQLite, so
+        # polling all configured contacts does not switch the foreground UI.
+        # Its session preview/unread fields can lag behind the message tables;
+        # using them as a gate can therefore miss messages that are already in
+        # the database.
+        is_replica_backend = (
+            getattr(self.client, "backend_name", "") == "wechatauto-replica"
+        )
+        if is_replica_backend:
+            contacts_to_read = list(self.contacts)
         else:
-            changed_sessions = self._get_changed_session_contacts()
-            contacts_to_read = (
-                list(self.contacts) if changed_sessions is None else list(changed_sessions)
-            )
+            missing_baselines = [
+                contact for contact in self.contacts if contact not in self._snapshots
+            ]
+            if missing_baselines:
+                contacts_to_read = missing_baselines
+            else:
+                changed_sessions = self._get_changed_session_contacts()
+                contacts_to_read = (
+                    list(self.contacts) if changed_sessions is None else list(changed_sessions)
+                )
         # Always include priority chats (private) so lively groups cannot starve them.
         for name in list(getattr(self, "always_poll", []) or []):
             if name in self.contacts and name not in contacts_to_read:
