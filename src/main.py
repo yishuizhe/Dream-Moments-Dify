@@ -151,14 +151,21 @@ class ChatBot:
         self.operit_bridge = operit_bridge
         logger.info(f"机器人名称: {self.robot_name}")
 
-    def _send_operit_reply(self, chat_name: str, text: str, is_group: bool) -> None:
+    def _send_operit_reply(
+        self,
+        chat_name: str,
+        text: str,
+        is_group: bool,
+        *,
+        history_chat_id: str = "",
+    ) -> None:
         """Return a bridge status/result to the originating WeChat conversation."""
         reply = str(text or "").strip()
         if not reply:
             return
         self.wx.send_text(chat_name, reply)
         self.history_store.record_message(
-            chat_id=chat_name,
+            chat_id=history_chat_id or chat_name,
             sender_id=self.robot_name or "bot",
             sender_name=self.robot_name or "AI",
             role="assistant",
@@ -176,6 +183,7 @@ class ChatBot:
         is_group: bool,
         command: str,
         raw_result: str,
+        history_chat_id: str = "",
     ) -> str:
         """Rewrite a device trace as Nana and persist the useful interaction."""
 
@@ -191,7 +199,7 @@ class ChatBot:
                 sender_name=sender_name,
                 identity_key=identity_key,
                 identity_aliases=config.behavior.context.identity_aliases,
-                chat_id=chat_name,
+                chat_id=history_chat_id or chat_name,
             )
         if phone_result_is_successful(raw_result, reply):
             memory = (
@@ -200,7 +208,7 @@ class ChatBot:
             )
             self.history_store.remember_user_message(
                 identity_key=identity_key,
-                chat_id=chat_name,
+                chat_id=history_chat_id or chat_name,
                 sender_id=sender_id,
                 sender_name=sender_name,
                 content=memory,
@@ -251,6 +259,7 @@ class ChatBot:
             username = str(latest.get("sender_id") or sender_name)
             is_group = bool(user_data.get("is_group", False))
             chat_id = str(user_data.get("chat_id") or str(queue_key).split("::member::", 1)[0])
+            reply_target = str(user_data.get("reply_target") or chat_id)
             handler_key = f"{chat_id}::member::{username}" if is_group else str(chat_id)
 
             # Already debounced once in ChatBot; process now to avoid a second 5s delay
@@ -269,6 +278,7 @@ class ChatBot:
                     "username": username,
                     "is_group": bool(is_group),
                     "chat_id": str(chat_id),
+                    "reply_target": reply_target,
                 }
             logger.info(
                 "开始处理消息队列 %s（%s条）",
@@ -283,6 +293,16 @@ class ChatBot:
         try:
             username = msg.sender
             content = getattr(msg, 'content', None) or getattr(msg, 'text', None)
+            stable_chat_id = str(getattr(msg, "chat_id", "") or chatName)
+            configured_name = str(getattr(msg, "configured_name", "") or chatName)
+            register_identity = getattr(self.history_store, "register_chat_identity", None)
+            if callable(register_identity):
+                stable_chat_id = register_identity(
+                    stable_chat_id,
+                    str(chatName),
+                    aliases=[configured_name],
+                    is_group=bool(is_group),
+                )
 
             remember_chat_type(chatName, bool(is_group))
             logger.info(f"收到消息 - 来源: {chatName}, 发送者: {username}, 是否群聊: {is_group}, 内容预览: {str(content)[:40] if content else ''}")
@@ -296,7 +316,7 @@ class ChatBot:
             if not isinstance(received_at, datetime):
                 received_at = datetime.now()
             self.history_store.record_message(
-                chat_id=chatName,
+                chat_id=stable_chat_id,
                 sender_id=sender_id,
                 sender_name=username,
                 role="user",
@@ -305,7 +325,7 @@ class ChatBot:
                 created_at=received_at,
             )
             identity_key, _ = resolve_identity(
-                chatName,
+                stable_chat_id,
                 sender_id,
                 username,
                 is_group,
@@ -313,7 +333,7 @@ class ChatBot:
             )
             self.history_store.remember_user_message(
                 identity_key=identity_key,
-                chat_id=chatName,
+                chat_id=stable_chat_id,
                 sender_id=sender_id,
                 sender_name=username,
                 content=content,
@@ -329,7 +349,10 @@ class ChatBot:
                 content=str(content),
                 is_group=bool(is_group),
                 on_reply=lambda reply: self._send_operit_reply(
-                    chatName, reply, bool(is_group)
+                    chatName,
+                    reply,
+                    bool(is_group),
+                    history_chat_id=stable_chat_id,
                 ),
                 process_result=lambda command, raw_result: self._process_operit_result(
                     chat_name=chatName,
@@ -339,6 +362,7 @@ class ChatBot:
                     is_group=bool(is_group),
                     command=command,
                     raw_result=raw_result,
+                    history_chat_id=stable_chat_id,
                 ),
             ):
                 return
@@ -350,9 +374,9 @@ class ChatBot:
             mention_triggered = False
             visual_requested = False
             queue_key = (
-                f"{chatName}::member::{sender_id}"
+                f"{stable_chat_id}::member::{sender_id}"
                 if is_group
-                else str(chatName)
+                else str(stable_chat_id)
             )
             pending_visual_request = self._has_pending_visual_request(queue_key)
 
@@ -360,7 +384,7 @@ class ChatBot:
             if is_group:
                 # 外部插件需要观察白名单群的每条文本消息，用于统计和命令处理。
                 plugin_reply = self.plugin_manager.handle_group_message(
-                    chat_id=chatName,
+                    chat_id=stable_chat_id,
                     sender_id=sender_id,
                     sender_name=username,
                     content=content,
@@ -374,7 +398,7 @@ class ChatBot:
                     # unrelated bubbles.
                     self.wx.send_text(chatName, str(plugin_reply).strip())
                     self.history_store.record_message(
-                        chat_id=chatName,
+                        chat_id=stable_chat_id,
                         sender_id=self.robot_name or "bot",
                         sender_name=self.robot_name or "AI",
                         role="assistant",
@@ -501,7 +525,8 @@ class ChatBot:
                         "messages": [str(content or "")],
                         "message_items": [queue_item],
                         "is_group": bool(is_group),
-                        "chat_id": str(chatName),
+                        "chat_id": str(stable_chat_id),
+                        "reply_target": str(chatName),
                         "sender_name": sender_name,
                         "username": str(sender_id),
                     }
@@ -512,7 +537,8 @@ class ChatBot:
                     queue["messages"].append(str(content or ""))
                     queue.setdefault("message_items", []).append(queue_item)
                     queue["is_group"] = bool(is_group)
-                    queue["chat_id"] = str(chatName)
+                    queue["chat_id"] = str(stable_chat_id)
+                    queue["reply_target"] = str(chatName)
                     queue["sender_name"] = sender_name
                     queue["username"] = str(sender_id)
                     queue["timer"] = threading.Timer(5.0, self.process_user_messages, args=[queue_key])
@@ -691,6 +717,24 @@ def build_runtime() -> None:
         operit_bridge=operit_bridge,
     )
     seed_known_group_chats()
+    try:
+        for identity in wechat_adapter.get_contact_identities():
+            aliases = [identity.get("configured_name", ""), *(identity.get("aliases") or [])]
+            stable_id = history_store.register_chat_identity(
+                identity.get("chat_id", ""),
+                identity.get("display_name", ""),
+                aliases=aliases,
+                is_group=bool(identity.get("is_group")),
+            )
+            if identity.get("is_group"):
+                known_group_chats.add(str(identity.get("display_name") or ""))
+            logger.info(
+                "微信会话身份已绑定: %s -> %s",
+                identity.get("display_name", ""),
+                stable_id,
+            )
+    except Exception:
+        logger.exception("绑定稳定微信会话身份失败，将在收到消息时重试")
     try:
         private_first = [n for n in listen_list if n not in known_group_chats]
         group_later = [n for n in listen_list if n in known_group_chats]

@@ -1,5 +1,5 @@
 {
-    "version": "2.1.0",
+    "version": "2.1.1",
     "last_update": "2026-08-28",
-    "description": "WeChat 4.1.12+ compatibility, multi-provider AI failover, natural replies, and NanaPhone integration."
+    "description": "Keep group monitoring, chat history, and member memory continuous when a WeChat group is renamed."
 }

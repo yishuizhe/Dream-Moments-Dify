@@ -21,6 +21,7 @@ class FakeSession:
     time: str = ""
     isnew: bool = False
     new_count: int = 0
+    username: str = ""
 
 
 @dataclass
@@ -82,6 +83,24 @@ class SessionAwareFakeWeChat(FakeWeChat):
         return list(self.sessions)
 
 
+class RenamedGroupFakeWeChat(FakeWeChat):
+    def __init__(self):
+        super().__init__({"旧群名": [FakeMessage("成员", "旧消息")]}, {"旧群名": "group"})
+        self.preview = "旧消息"
+
+    def ResolveContactId(self, name):
+        return "room@chatroom" if name == "旧群名" else ""
+
+    def BindContactId(self, name, username):
+        pass
+
+    def ChatInfo(self):
+        return {"chat_type": "group", "chat_name": "新群名", "chat_id": "room@chatroom"}
+
+    def GetSession(self):
+        return [FakeSession("新群名", self.preview, "10:00", username="room@chatroom")]
+
+
 class WxAuto4PollingAdapterTests(unittest.TestCase):
     def make_adapter(self, fake, state_path=None, **kwargs):
         return WxAuto4PollingAdapter(
@@ -105,6 +124,21 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.poll_once(), [])
 
         self.assertEqual(fake.open_calls, [])
+
+    def test_group_rename_is_matched_by_stable_session_id(self):
+        fake = RenamedGroupFakeWeChat()
+        adapter = WxAuto4PollingAdapter(["旧群名"], wechat_factory=lambda: fake)
+        self.assertEqual(adapter.poll_once(), [])
+        self.assertEqual(adapter.poll_once(), [])
+
+        fake.preview = "娜娜在吗"
+        fake.chats["旧群名"].append(FakeMessage("成员", "娜娜在吗"))
+        messages = adapter.poll_once()
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].chat_name, "新群名")
+        self.assertEqual(messages[0].chat_id, "room@chatroom")
+        self.assertEqual(messages[0].configured_name, "旧群名")
 
     def test_session_polling_opens_only_changed_whitelisted_chat(self):
         friend = "friend"

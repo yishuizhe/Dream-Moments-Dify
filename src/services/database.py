@@ -57,6 +57,19 @@ class UserMemory(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
 
+class ChatIdentity(Base):
+    """Stable WeChat conversation id with all observed display-name aliases."""
+
+    __tablename__ = "chat_identities"
+
+    id = Column(Integer, primary_key=True)
+    stable_id = Column(String(255), nullable=False, unique=True, index=True)
+    display_name = Column(String(255), nullable=False, default="")
+    aliases_json = Column(Text, nullable=False, default="[]")
+    is_group = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+
 Base.metadata.create_all(engine)
 
 
@@ -113,6 +126,103 @@ class HistoryStore:
 
     def __init__(self, session_factory=None) -> None:
         self.session_factory = session_factory or Session
+
+    def register_chat_identity(
+        self,
+        stable_id: str,
+        display_name: str,
+        *,
+        aliases: list[str] | None = None,
+        is_group: bool = False,
+    ) -> str:
+        """Register a stable chat id and migrate rows stored under old names.
+
+        WeChat group display names are mutable.  The ``@chatroom`` username is
+        stable, so all history and per-member memory is consolidated under it.
+        """
+
+        stable = str(stable_id or display_name or "").strip()
+        current = str(display_name or stable).strip()
+        if not stable:
+            return current
+        observed = {current, *(str(item or "").strip() for item in aliases or [])}
+        observed.discard("")
+        observed.discard(stable)
+
+        session = self.session_factory()
+        try:
+            row = session.query(ChatIdentity).filter(ChatIdentity.stable_id == stable).first()
+            known: set[str] = set()
+            if row is not None:
+                try:
+                    known = {str(item).strip() for item in json.loads(row.aliases_json or "[]")}
+                except (TypeError, ValueError):
+                    known = set()
+            else:
+                row = ChatIdentity(stable_id=stable)
+                session.add(row)
+
+            all_aliases = {item for item in known | observed if item and item != stable}
+            row.display_name = current
+            row.aliases_json = json.dumps(sorted(all_aliases), ensure_ascii=False)
+            row.is_group = bool(is_group)
+
+            if all_aliases:
+                session.query(ConversationMessage).filter(
+                    ConversationMessage.chat_id.in_(all_aliases)
+                ).update({ConversationMessage.chat_id: stable}, synchronize_session=False)
+
+                memories = session.query(UserMemory).filter(
+                    UserMemory.chat_id.in_(all_aliases)
+                ).all()
+                for memory in memories:
+                    old_chat_id = str(memory.chat_id or "")
+                    old_key = str(memory.identity_key or "")
+                    new_key = old_key
+                    prefix = f"group:{old_chat_id}:member:"
+                    if old_key.startswith(prefix):
+                        new_key = f"group:{stable}:member:{old_key[len(prefix):]}"
+                    duplicate = session.query(UserMemory).filter(
+                        UserMemory.identity_key == new_key,
+                        UserMemory.id != memory.id,
+                    ).first()
+                    if duplicate is not None:
+                        merged = self._merge_memory_texts(duplicate.memory_text, memory.memory_text)
+                        duplicate.memory_text = merged
+                        duplicate.chat_id = stable
+                        duplicate.updated_at = datetime.now()
+                        session.delete(memory)
+                    else:
+                        memory.chat_id = stable
+                        memory.identity_key = new_key
+            session.commit()
+            return stable
+        finally:
+            session.close()
+
+    @staticmethod
+    def _merge_memory_texts(first: str, second: str) -> str:
+        result: list[str] = []
+        for raw in (first, second):
+            try:
+                items = json.loads(raw or "[]")
+            except (TypeError, ValueError):
+                items = []
+            for item in items if isinstance(items, list) else []:
+                text = str(item or "").strip()
+                if text and text not in result:
+                    result.append(text)
+        return json.dumps(result[-12:], ensure_ascii=False)
+
+    def get_chat_display_name(self, stable_id: str) -> str:
+        session = self.session_factory()
+        try:
+            row = session.query(ChatIdentity).filter(
+                ChatIdentity.stable_id == str(stable_id or "")
+            ).first()
+            return str(row.display_name or "") if row is not None else ""
+        finally:
+            session.close()
 
     def record_message(
         self,

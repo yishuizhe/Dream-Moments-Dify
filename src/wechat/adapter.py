@@ -29,6 +29,9 @@ class IncomingMessage:
     chat_name: str
     sender: str
     content: str
+    chat_id: str = ""
+    configured_name: str = ""
+    sender_id: str = ""
     message_type: str = "friend"
     is_group: bool = False
     is_self: bool = False
@@ -61,7 +64,7 @@ class WxAuto4PollingAdapter:
     # Version 2 intentionally drops wxauto4's UI ``id`` from persisted tokens.
     # That id is recreated after switching chats and therefore is not suitable
     # for comparing snapshots across foreground polling rounds.
-    STATE_VERSION = 3
+    STATE_VERSION = 4
 
     def __init__(
         self,
@@ -92,6 +95,8 @@ class WxAuto4PollingAdapter:
         # GetSession() inspects the conversation list without opening chats.
         # Preview signatures also detect changes in the currently open chat.
         self._session_signatures: dict[str, str] = {}
+        self._contact_ids: dict[str, str] = {}
+        self._state_dirty = False
         self._contact_failures: dict[str, int] = {}
         self._contact_retry_after: dict[str, float] = {}
         self._load_state()
@@ -176,6 +181,10 @@ class WxAuto4PollingAdapter:
 
     def open_chat(self, chat_name: str) -> Any:
         with self._ui_lock:
+            binder = getattr(self.client, "BindContactId", None)
+            stable_id = self._contact_ids.get(str(chat_name), "")
+            if stable_id and callable(binder):
+                binder(chat_name, stable_id)
             method = getattr(self.client, "ChatWith")
             try:
                 result = method(chat_name, exact=self.exact_match)
@@ -183,6 +192,13 @@ class WxAuto4PollingAdapter:
                 result = method(chat_name)
             if result is False:
                 raise RuntimeError(f"找不到微信会话: {chat_name}")
+            info_getter = getattr(self.client, "ChatInfo", None)
+            if callable(info_getter):
+                info = info_getter() or {}
+                observed_id = str(info.get("chat_id") or "").strip() if isinstance(info, dict) else ""
+                if observed_id and self._contact_ids.get(str(chat_name)) != observed_id:
+                    self._contact_ids[str(chat_name)] = observed_id
+                    self._state_dirty = True
             return result
 
     def validate_contacts(self) -> list[str]:
@@ -196,6 +212,49 @@ class WxAuto4PollingAdapter:
                 logger.exception("无法打开微信会话: %s", contact)
                 failed.append(contact)
         return failed
+
+    def get_contact_identities(self) -> list[dict[str, Any]]:
+        """Return configured aliases, current names and stable conversation ids."""
+
+        with self._ui_lock:
+            getter = getattr(self.client, "GetSession", None)
+            sessions = list(getter() or []) if callable(getter) else []
+            resolver = getattr(self.client, "ResolveContactId", None)
+
+        current_by_id = {
+            self._session_value(item, "username", "chat_id", "wxid"):
+            self._session_value(item, "name", "Name", "who", "chat_name")
+            for item in sessions
+        }
+        result: list[dict[str, Any]] = []
+        for configured in self.contacts:
+            stable_id = self._contact_ids.get(configured, "")
+            if not stable_id and callable(resolver):
+                try:
+                    stable_id = str(resolver(configured) or "")
+                except Exception:
+                    stable_id = ""
+            if not stable_id:
+                continue
+            if self._contact_ids.get(configured) != stable_id:
+                self._contact_ids[configured] = stable_id
+                self._state_dirty = True
+            aliases = [
+                name for name, saved_id in self._contact_ids.items()
+                if saved_id == stable_id and name != configured
+            ]
+            current_name = current_by_id.get(stable_id) or configured
+            result.append({
+                "configured_name": configured,
+                "display_name": current_name,
+                "chat_id": stable_id,
+                "aliases": aliases,
+                "is_group": stable_id.endswith("@chatroom"),
+            })
+        if self._state_dirty:
+            self._save_state()
+            self._state_dirty = False
+        return result
 
     def get_all_messages(self, chat_name: str) -> list[Any]:
         with self._ui_lock:
@@ -381,8 +440,9 @@ class WxAuto4PollingAdapter:
                 logger.exception("Failed to poll WeChat chat: %s", contact)
                 failed_contacts.append(contact)
 
-        if changed:
+        if changed or self._state_dirty:
             self._save_state()
+            self._state_dirty = False
         if contacts_to_read and len(failed_contacts) == len(contacts_to_read):
             raise RuntimeError("所有微信会话轮询均失败，请重新连接微信")
         return result
@@ -416,21 +476,38 @@ class WxAuto4PollingAdapter:
             sessions = list(getter() or [])
 
         wanted = set(self.contacts)
+        wanted_ids: dict[str, str] = {}
+        resolver = getattr(self.client, "ResolveContactId", None)
+        if callable(resolver):
+            for contact in self.contacts:
+                stable_id = self._contact_ids.get(contact, "")
+                if not stable_id:
+                    try:
+                        stable_id = str(resolver(contact) or "")
+                    except Exception:
+                        stable_id = ""
+                if stable_id:
+                    if self._contact_ids.get(contact) != stable_id:
+                        self._contact_ids[contact] = stable_id
+                        self._state_dirty = True
+                    wanted_ids[stable_id] = contact
         changed: list[str] = []
         seen: set[str] = set()
         for session in sessions:
             name = self._session_value(session, "name", "Name", "who", "chat_name")
-            if name not in wanted or name in seen:
+            session_id = self._session_value(session, "username", "chat_id", "wxid")
+            configured_name = name if name in wanted else wanted_ids.get(session_id, "")
+            if not configured_name or configured_name in seen:
                 continue
-            seen.add(name)
+            seen.add(configured_name)
 
             content = self._session_value(session, "content", "text", "message")
             timestamp = self._session_value(session, "time", "timestamp")
             signature = hashlib.sha256(
                 f"{content}\x1f{timestamp}".encode("utf-8")
             ).hexdigest()
-            previous_signature = self._session_signatures.get(name)
-            self._session_signatures[name] = signature
+            previous_signature = self._session_signatures.get(configured_name)
+            self._session_signatures[configured_name] = signature
 
             unread_count = self._session_int(session, "new_count", "unread_count")
             is_new = self._session_bool(session, "isnew", "is_new", "unread")
@@ -438,7 +515,7 @@ class WxAuto4PollingAdapter:
                 previous_signature is not None and previous_signature != signature
             )
             if unread_count > 0 or is_new or preview_changed:
-                changed.append(name)
+                changed.append(configured_name)
 
         return changed
 
@@ -486,39 +563,39 @@ class WxAuto4PollingAdapter:
         # could switch chats and invalidate those controls.
         with self._ui_lock:
             self.open_chat(chat_name)
-            is_group_chat = self._current_chat_is_group()
+            chat_info = self._current_chat_info()
+            is_group_chat = chat_info.get("chat_type") == "group" if chat_info else None
+            current_name = str(chat_info.get("chat_name") or chat_name) if chat_info else chat_name
+            stable_chat_id = str(chat_info.get("chat_id") or self._contact_ids.get(chat_name) or current_name) if chat_info else str(self._contact_ids.get(chat_name) or current_name)
             raw_messages = list(self.client.GetAllMessage() or [])
 
             normalized: list[_SnapshotMessage] = []
             for raw in raw_messages[-self.history_size :]:
                 item = self._normalize_message(
-                    chat_name,
+                    current_name,
                     raw,
                     is_group_chat=is_group_chat,
+                    stable_chat_id=stable_chat_id,
+                    configured_name=chat_name,
                 )
                 if item is not None:
                     normalized.append(item)
             return normalized
 
-    def _current_chat_is_group(self) -> bool | None:
-        """读取当前聊天类型；旧版客户端缺少该接口时返回 ``None``。"""
+    def _current_chat_info(self) -> dict[str, Any]:
+        """Read current display name, stable id and type when available."""
 
         getter = getattr(self.client, "ChatInfo", None)
         if not callable(getter):
-            return None
+            return {}
         try:
             info = getter() or {}
         except Exception:
             logger.debug("读取当前微信会话类型失败", exc_info=True)
-            return None
+            return {}
         if not isinstance(info, dict):
-            return None
-        chat_type = str(info.get("chat_type", "")).strip().lower()
-        if chat_type == "group":
-            return True
-        if chat_type == "friend":
-            return False
-        return None
+            return {}
+        return info
 
     def _normalize_message(
         self,
@@ -526,9 +603,12 @@ class WxAuto4PollingAdapter:
         raw: Any,
         *,
         is_group_chat: bool | None = None,
+        stable_chat_id: str = "",
+        configured_name: str = "",
     ) -> _SnapshotMessage | None:
         raw_content = self._first_text(raw, "content", "text", "raw")
         sender = self._first_text(raw, "sender", "sender_name", "name")
+        sender_id = self._first_text(raw, "sender_id", "wxid") or sender
         kind = self._first_text(raw, "type", "attr") or raw.__class__.__name__
         attr = self._first_text(raw, "attr")
 
@@ -585,7 +665,10 @@ class WxAuto4PollingAdapter:
         token = hashlib.sha256(token_source.encode("utf-8")).hexdigest()
         message = IncomingMessage(
             chat_name=chat_name,
+            chat_id=stable_chat_id or chat_name,
+            configured_name=configured_name or chat_name,
             sender=sender or chat_name,
+            sender_id=sender_id,
             content=content,
             message_type="self" if is_self else (kind or "friend"),
             is_group=is_group,
@@ -668,7 +751,7 @@ class WxAuto4PollingAdapter:
             return
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if data.get("version") != self.STATE_VERSION:
+            if data.get("version") not in {2, 3, self.STATE_VERSION}:
                 return
             chats = data.get("chats", {})
             if isinstance(chats, dict):
@@ -676,6 +759,13 @@ class WxAuto4PollingAdapter:
                     str(chat): [str(token) for token in tokens][-self.history_size :]
                     for chat, tokens in chats.items()
                     if isinstance(tokens, list)
+                }
+            contact_ids = data.get("contact_ids", {})
+            if isinstance(contact_ids, dict):
+                self._contact_ids = {
+                    str(name): str(stable_id)
+                    for name, stable_id in contact_ids.items()
+                    if str(name).strip() and str(stable_id).strip()
                 }
         except Exception:
             logger.exception("读取微信轮询状态失败，将重新建立基线: %s", self.state_path)
@@ -687,7 +777,11 @@ class WxAuto4PollingAdapter:
             try:
                 self.state_path.parent.mkdir(parents=True, exist_ok=True)
                 temp_path = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
-                payload = {"version": self.STATE_VERSION, "chats": self._snapshots}
+                payload = {
+                    "version": self.STATE_VERSION,
+                    "chats": self._snapshots,
+                    "contact_ids": self._contact_ids,
+                }
                 temp_path.write_text(
                     json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
                 )

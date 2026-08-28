@@ -54,6 +54,32 @@ class HistoryMemoryTests(unittest.TestCase):
         rows = self.store.get_recent_messages("g", 50, sender_name="A")
         self.assertEqual([row["content"] for row in rows], ["a1", "a2"])
 
+    def test_group_rename_migrates_history_and_member_memory(self):
+        old_key = make_identity_key("旧群名", "member-1", True)
+        self.store.record_message(
+            chat_id="旧群名", sender_id="member-1", sender_name="A",
+            role="user", content="改名前的消息", is_group=True,
+        )
+        self.store.remember_user_message(
+            identity_key=old_key, chat_id="旧群名", sender_id="member-1",
+            sender_name="A", content="改名前的记忆",
+        )
+
+        stable = self.store.register_chat_identity(
+            "room@chatroom", "新群名", aliases=["旧群名"], is_group=True,
+        )
+
+        self.assertEqual(stable, "room@chatroom")
+        self.assertEqual(
+            [row["content"] for row in self.store.get_recent_messages(stable, 10)],
+            ["改名前的消息"],
+        )
+        self.assertEqual(
+            self.store.get_memory_items(make_identity_key(stable, "member-1", True)),
+            ["改名前的记忆"],
+        )
+        self.assertEqual(self.store.get_chat_display_name(stable), "新群名")
+
     def test_configured_aliases_share_one_identity_and_previous_memory(self):
         aliases = ["我=私聊名=群昵称"]
         private_key, private_aliases = resolve_identity(
