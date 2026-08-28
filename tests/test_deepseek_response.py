@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -55,6 +56,38 @@ class DeepSeekResponseValidationTests(unittest.TestCase):
                 {"choices": [{"message": {"content": "   "}}]}
             )
         )
+
+    def test_zhipu_chat_disables_thinking_to_preserve_reply_tokens(self):
+        ai = DeepSeekAI(
+            api_key="test-key",
+            base_url="https://open.bigmodel.cn/api/paas/v4/",
+            model="glm-4.7-flash",
+            max_token=64,
+            temperature=0.2,
+            max_groups=2,
+        )
+        response = Mock()
+        response.model_dump.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "正常"}}]
+        }
+        response.choices = [Mock(message=Mock(content="正常"))]
+        ai.client.chat.completions.create = Mock(return_value=response)
+
+        self.assertEqual(ai.get_response("你好", "u", "system"), "正常")
+        request = ai.client.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["extra_body"], {"thinking": {"type": "disabled"}})
+
+    def test_non_zhipu_chat_does_not_receive_vendor_specific_thinking(self):
+        response = Mock()
+        response.model_dump.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}]
+        }
+        response.choices = [Mock(message=Mock(content="OK"))]
+        self.ai.client.chat.completions.create = Mock(return_value=response)
+
+        self.assertEqual(self.ai.get_response("hello", "u", "system"), "OK")
+        request = self.ai.client.chat.completions.create.call_args.kwargs
+        self.assertNotIn("extra_body", request)
 
 
 if __name__ == "__main__":

@@ -11,23 +11,16 @@ import logging
 import re
 import os
 import random
-import json  # 新增导入
-import time  # 新增导入
 from typing import Dict, List, Optional
 from openai import OpenAI
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-    retry_if_exception_type
-)
 import requests
 
 logger = logging.getLogger(__name__)
 
 class DeepSeekAI:
     def __init__(self, api_key: str, base_url: str, model: str,
-                 max_token: int, temperature: float, max_groups: int):
+                 max_token: int, temperature: float, max_groups: int,
+                 raise_errors: bool = False, provider_name: str = "openai-compatible"):
         """
         强化版AI服务初始化
 
@@ -53,6 +46,9 @@ class DeepSeekAI:
             "temperature": temperature,
             "max_groups": max_groups,
         }
+        self.raise_errors = bool(raise_errors)
+        self.provider_name = str(provider_name or "openai-compatible")
+        self.is_zhipu = "open.bigmodel.cn" in str(base_url).lower()
         self.chat_contexts: Dict[str, List[Dict]] = {}
 
         # 安全字符白名单（可根据需要扩展）
@@ -108,11 +104,6 @@ class DeepSeekAI:
             logger.error("API响应不是字典类型: %s", type(response).__name__)
             return False
 
-        logger.debug(
-            "API响应调试信息：\n%s",
-            json.dumps(response, indent=2, ensure_ascii=False, default=str),
-        )
-
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
             logger.error("API响应缺少非空 choices 数组")
@@ -130,7 +121,12 @@ class DeepSeekAI:
 
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            logger.error("API响应缺少有效的助手文本内容")
+            reasoning = message.get("reasoning_content")
+            logger.error(
+                "API响应没有可发送的正文（finish_reason=%s, reasoning_present=%s）",
+                first_choice.get("finish_reason"),
+                bool(isinstance(reasoning, str) and reasoning.strip()),
+            )
             return False
 
         usage = response.get("usage")
@@ -149,6 +145,7 @@ class DeepSeekAI:
                 return "嗯...我好像收到了空白消息呢（歪头）"
 
             # —— 阶段2：上下文更新 ——
+            previous_context = list(self.chat_contexts.get(user_id, []))
             self._manage_context(user_id, message)
 
             # —— 阶段3：构建请求参数 ——
@@ -233,15 +230,18 @@ class DeepSeekAI:
                     "messages": messages,  # 消息列表
                     "temperature": self.config["temperature"],  # 温度参数
                     "max_tokens": self.config["max_token"],  # 最大 token 数
-                    "top_p": 0.95,  # top_p 参数
-                    "frequency_penalty": 0.2  # 频率惩罚参数
                 }
+                # GLM-4.7-Flash 默认思考时可能在较小 max_tokens 内只返回
+                # reasoning_content 而没有可发送的正文。微信闲聊默认关闭思考，
+                # 同时降低延迟和免费线路压力。
+                if self.is_zhipu:
+                    request_config["extra_body"] = {"thinking": {"type": "disabled"}}
                 
                 # 使用 OpenAI 客户端发送请求
                 response = self.client.chat.completions.create(**request_config)
                 # 验证 API 响应结构
                 if not self._validate_response(response.model_dump()):
-                    raise ValueError("错误的API响应结构")
+                    raise ValueError("API响应没有可发送的正文")
                     
                 # 获取原始内容
                 raw_content = response.choices[0].message.content
@@ -253,7 +253,11 @@ class DeepSeekAI:
                 return clean_content
 
         except Exception as e:
-            logger.error("深度求索服务调用失败: %s", str(e), exc_info=True)
+            if 'previous_context' in locals():
+                self.chat_contexts[user_id] = previous_context
+            logger.error("%s 服务调用失败: %s", self.provider_name, str(e), exc_info=True)
+            if self.raise_errors:
+                raise
             return random.choice([
                 "好像有些小状况，请再试一次吧～",
                 "信号好像不太稳定呢（皱眉）",

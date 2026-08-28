@@ -40,6 +40,32 @@
                 }
             }
         },
+        "operit_settings": {
+            "title": "Operit 安卓手机控制",
+            "settings": {
+                "enabled": {"value": false, "type": "boolean", "description": "启用微信到 Operit 的手机控制桥接"},
+                "base_url": {"value": "http://127.0.0.1:8094", "type": "string", "description": "Operit 外部 HTTP API 地址；同一局域网通常填写手机 IP"},
+                "bearer_token": {"value": "", "type": "string", "description": "Operit 外部 HTTP API 的 Bearer Token", "is_secret": true},
+                "allowed_senders": {"value": [], "type": "array", "description": "允许控制手机的微信发送者 ID 或昵称；留空表示拒绝所有人"},
+                "allowed_chats": {"value": [], "type": "array", "description": "可选的微信会话白名单；留空表示不额外限制会话"},
+                "allow_group_commands": {"value": false, "type": "boolean", "description": "允许在群聊中发送手机控制指令；默认关闭"},
+                "command_prefixes": {"value": ["手机：", "手机:", "/手机 ", "/phone "], "type": "array", "description": "仅这些明确前缀会被转发到手机"},
+                "request_timeout_seconds": {"value": 180, "type": "number", "description": "等待 Operit 完成单个任务的最长秒数"},
+                "show_floating": {"value": true, "type": "boolean", "description": "执行任务时在安卓手机上显示 Operit 浮窗"},
+                "require_confirmation": {"value": true, "type": "boolean", "description": "付款、发送、删除、安装等高风险操作要求确认码"},
+                "confirmation_ttl_seconds": {"value": 120, "type": "number", "description": "高风险操作确认码有效秒数"},
+                "session_file": {"value": "data/operit_sessions.json", "type": "string", "description": "微信会话与 Operit 对话 ID 的本地映射文件"}
+            }
+        },
+        "nana_phone_settings": {
+            "title": "娜娜自研手机端",
+            "settings": {
+                "enabled": {"value": false, "type": "boolean", "description": "优先使用自研 NanaPhone；启用后不再把任务交给 Operit"},
+                "base_url": {"value": "http://127.0.0.1:8765", "type": "string", "description": "手机端地址，例如 http://100.x.x.x:8765"},
+                "pairing_token": {"value": "", "type": "string", "description": "娜娜手机端显示的配对密钥", "is_secret": true},
+                "request_timeout_seconds": {"value": 20, "type": "number", "description": "等待手机端执行单个动作的最长秒数"}
+            }
+        },
         "llm_settings": {
             "title": "大语言模型配置",
             "settings": {
@@ -49,6 +75,7 @@
                     "description": "聊天 AI 提供方",
                     "options": [
                         "deepseek",
+                        "openai_compatible",
                         "dify"
                     ]
                 },
@@ -99,7 +126,28 @@
                     "value": "https://api.dify.ai/v1/",
                     "type": "string",
                     "description": "Dify API 基础 URL"
-                }
+                },
+                "fallback_1_enabled": {"value": false, "type": "boolean", "description": "启用备用线路 1（主线路限流/超时时切换）"},
+                "fallback_1_name": {"value": "ModelScope", "type": "string", "description": "备用线路 1 名称"},
+                "fallback_1_api_key": {"value": "", "type": "string", "description": "备用线路 1 API 密钥", "is_secret": true},
+                "fallback_1_base_url": {"value": "https://api-inference.modelscope.cn/v1", "type": "string", "description": "备用线路 1 OpenAI 兼容 URL"},
+                "fallback_1_model": {"value": "Qwen/Qwen3-32B", "type": "string", "description": "备用线路 1 模型 ID（以账号当前可用列表为准）"},
+                "fallback_1_complex_only": {"value": false, "type": "boolean", "description": "仅复杂请求使用该线路"},
+                "fallback_1_max_tokens": {"value": 800, "type": "number", "description": "备用线路 1 最大输出 token"},
+                "fallback_2_enabled": {"value": false, "type": "boolean", "description": "启用备用线路 2"},
+                "fallback_2_name": {"value": "Groq", "type": "string", "description": "备用线路 2 名称"},
+                "fallback_2_api_key": {"value": "", "type": "string", "description": "备用线路 2 API 密钥", "is_secret": true},
+                "fallback_2_base_url": {"value": "https://api.groq.com/openai/v1", "type": "string", "description": "备用线路 2 OpenAI 兼容 URL"},
+                "fallback_2_model": {"value": "qwen/qwen3.6-27b", "type": "string", "description": "备用线路 2 模型 ID"},
+                "fallback_2_complex_only": {"value": false, "type": "boolean", "description": "仅复杂请求使用该线路"},
+                "fallback_2_max_tokens": {"value": 800, "type": "number", "description": "备用线路 2 最大输出 token"},
+                "fallback_3_enabled": {"value": false, "type": "boolean", "description": "启用备用线路 3"},
+                "fallback_3_name": {"value": "DeepSeek 付费复杂任务", "type": "string", "description": "备用线路 3 名称"},
+                "fallback_3_api_key": {"value": "", "type": "string", "description": "备用线路 3 API 密钥", "is_secret": true},
+                "fallback_3_base_url": {"value": "https://api.deepseek.com/v1", "type": "string", "description": "备用线路 3 OpenAI 兼容 URL"},
+                "fallback_3_model": {"value": "deepseek-chat", "type": "string", "description": "备用线路 3 模型 ID"},
+                "fallback_3_complex_only": {"value": true, "type": "boolean", "description": "只在复杂任务时允许使用付费线路"},
+                "fallback_3_max_tokens": {"value": 2000, "type": "number", "description": "备用线路 3 最大输出 token"}
             }
         },
         "media_settings": {

@@ -149,11 +149,14 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
 
     config_groups = {
         "基础配置": {},
+        "AI 备用线路": {},
         "图像识别API配置": {},
         "图像生成配置": {},
         "语音配置": {},
         "Prompt配置": {},
         "微信轮询配置": {},
+        "Operit 手机控制": {},
+        "娜娜自研手机端": {},
     }
 
     # 基础配置
@@ -166,7 +169,7 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
             "AI_PROVIDER": {
                 "value": config.llm.provider,
                 "description": "聊天 AI 提供方",
-                "options": ["deepseek", "dify"],
+                "options": ["openai_compatible", "deepseek", "dify"],
             },
             "DEEPSEEK_BASE_URL": {
                 "value": config.llm.base_url,
@@ -322,6 +325,44 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
         }
     )
 
+    for index in range(1, 4):
+        route = config.llm.fallback_routes[index - 1] if index <= len(config.llm.fallback_routes) else None
+        prefix = f"FALLBACK_{index}_"
+        config_groups["AI 备用线路"].update({
+            prefix + "ENABLED": {"value": bool(route and route.enabled), "type": "boolean", "description": f"启用备用线路 {index}"},
+            prefix + "NAME": {"value": route.name if route else f"备用线路 {index}", "description": "仅用于日志识别，不会发给对方"},
+            prefix + "BASE_URL": {"value": route.base_url if route else "", "description": "OpenAI 兼容 API 基础 URL"},
+            prefix + "API_KEY": {"value": route.api_key if route else "", "description": "API 密钥", "is_secret": True},
+            prefix + "MODEL": {"value": route.model if route else "", "description": "模型 ID"},
+            prefix + "COMPLEX_ONLY": {"value": bool(route and route.complex_only), "type": "boolean", "description": "只有复杂任务才允许走该线路（适合付费模型）"},
+            prefix + "MAX_TOKENS": {"value": route.max_tokens if route and route.max_tokens else config.llm.max_tokens, "type": "number", "description": "该线路最大输出 token"},
+        })
+
+    config_groups["Operit 手机控制"].update(
+        {
+            "OPERIT_ENABLED": {"value": config.operit.enabled, "type": "boolean", "description": "启用微信到 Operit 的安卓手机控制桥接"},
+            "OPERIT_BASE_URL": {"value": config.operit.base_url, "description": "例如 http://192.168.1.23:8094"},
+            "OPERIT_BEARER_TOKEN": {"value": config.operit.bearer_token, "description": "Operit 外部 HTTP API Bearer Token", "is_secret": True},
+            "OPERIT_ALLOWED_SENDERS": {"value": config.operit.allowed_senders, "type": "array", "description": "允许控制手机的微信发送者 ID 或昵称；不能为空"},
+            "OPERIT_ALLOWED_CHATS": {"value": config.operit.allowed_chats, "type": "array", "description": "可选的微信会话白名单"},
+            "OPERIT_ALLOW_GROUPS": {"value": config.operit.allow_group_commands, "type": "boolean", "description": "允许群聊手机指令；建议保持关闭"},
+            "OPERIT_PREFIXES": {"value": config.operit.command_prefixes, "type": "array", "description": "只有这些明确前缀会被转发"},
+            "OPERIT_TIMEOUT": {"value": config.operit.request_timeout_seconds, "type": "number", "description": "等待单个手机任务的最长秒数"},
+            "OPERIT_SHOW_FLOATING": {"value": config.operit.show_floating, "type": "boolean", "description": "执行时显示 Operit 浮窗"},
+            "OPERIT_REQUIRE_CONFIRMATION": {"value": config.operit.require_confirmation, "type": "boolean", "description": "高风险操作要求一次性确认码"},
+            "OPERIT_CONFIRM_TTL": {"value": config.operit.confirmation_ttl_seconds, "type": "number", "description": "确认码有效秒数"},
+        }
+    )
+
+    config_groups["娜娜自研手机端"].update(
+        {
+            "NANA_PHONE_ENABLED": {"value": config.nana_phone.enabled, "type": "boolean", "description": "优先使用自研手机端；开启后不再调用 Operit"},
+            "NANA_PHONE_BASE_URL": {"value": config.nana_phone.base_url, "description": "例如 http://100.x.x.x:8765"},
+            "NANA_PHONE_PAIRING_TOKEN": {"value": config.nana_phone.pairing_token, "description": "手机 App 中显示的配对密钥", "is_secret": True},
+            "NANA_PHONE_TIMEOUT": {"value": config.nana_phone.request_timeout_seconds, "type": "number", "description": "单个手机动作的超时秒数"},
+        }
+    )
+
     return config_groups
 
 
@@ -331,6 +372,9 @@ def save_config(new_config: Dict[str, Any]) -> bool:
         from src.config import (
             UserSettings,
             WeChatSettings,
+            OperitSettings,
+            NanaPhoneSettings,
+            LLMRouteSettings,
             LLMSettings,
             ImageRecognitionSettings,
             ImageGenerationSettings,
@@ -359,9 +403,44 @@ def save_config(new_config: Dict[str, Any]) -> bool:
             exact_match=parse_bool(new_config.get("WECHAT_EXACT_MATCH", config.wechat.exact_match)),
         )
 
+        operit_settings = OperitSettings(
+            enabled=parse_bool(new_config.get("OPERIT_ENABLED", config.operit.enabled)),
+            base_url=str(new_config.get("OPERIT_BASE_URL", config.operit.base_url)).strip(),
+            bearer_token=str(new_config.get("OPERIT_BEARER_TOKEN", config.operit.bearer_token)).strip(),
+            allowed_senders=[str(item).strip() for item in new_config.get("OPERIT_ALLOWED_SENDERS", config.operit.allowed_senders) if str(item).strip()],
+            allowed_chats=[str(item).strip() for item in new_config.get("OPERIT_ALLOWED_CHATS", config.operit.allowed_chats) if str(item).strip()],
+            allow_group_commands=parse_bool(new_config.get("OPERIT_ALLOW_GROUPS", config.operit.allow_group_commands)),
+            command_prefixes=[str(item) for item in new_config.get("OPERIT_PREFIXES", config.operit.command_prefixes) if str(item).strip()],
+            request_timeout_seconds=float(new_config.get("OPERIT_TIMEOUT", config.operit.request_timeout_seconds)),
+            show_floating=parse_bool(new_config.get("OPERIT_SHOW_FLOATING", config.operit.show_floating)),
+            require_confirmation=parse_bool(new_config.get("OPERIT_REQUIRE_CONFIRMATION", config.operit.require_confirmation)),
+            confirmation_ttl_seconds=float(new_config.get("OPERIT_CONFIRM_TTL", config.operit.confirmation_ttl_seconds)),
+            session_file=config.operit.session_file,
+        )
+
+        nana_phone_settings = NanaPhoneSettings(
+            enabled=parse_bool(new_config.get("NANA_PHONE_ENABLED", config.nana_phone.enabled)),
+            base_url=str(new_config.get("NANA_PHONE_BASE_URL", config.nana_phone.base_url)).strip(),
+            pairing_token=str(new_config.get("NANA_PHONE_PAIRING_TOKEN", config.nana_phone.pairing_token)).strip(),
+            request_timeout_seconds=float(new_config.get("NANA_PHONE_TIMEOUT", config.nana_phone.request_timeout_seconds)),
+        )
+
         provider = str(new_config.get("AI_PROVIDER", config.llm.provider)).strip().lower()
-        if provider not in {"deepseek", "dify"}:
+        if provider not in {"deepseek", "openai_compatible", "dify"}:
             provider = "deepseek"
+        fallback_routes = []
+        for index in range(1, 4):
+            current = config.llm.fallback_routes[index - 1] if index <= len(config.llm.fallback_routes) else LLMRouteSettings()
+            prefix = f"FALLBACK_{index}_"
+            fallback_routes.append(LLMRouteSettings(
+                name=str(new_config.get(prefix + "NAME", current.name or f"备用线路 {index}")).strip(),
+                enabled=parse_bool(new_config.get(prefix + "ENABLED", current.enabled)),
+                api_key=str(new_config.get(prefix + "API_KEY", current.api_key) or "").strip(),
+                base_url=str(new_config.get(prefix + "BASE_URL", current.base_url) or "").strip(),
+                model=str(new_config.get(prefix + "MODEL", current.model) or "").strip(),
+                complex_only=parse_bool(new_config.get(prefix + "COMPLEX_ONLY", current.complex_only)),
+                max_tokens=int(new_config.get(prefix + "MAX_TOKENS", current.max_tokens or config.llm.max_tokens)),
+            ))
         llm_settings = LLMSettings(
             api_key=new_config.get("DEEPSEEK_API_KEY", config.llm.api_key),
             base_url=new_config.get("DEEPSEEK_BASE_URL", config.llm.base_url),
@@ -372,6 +451,7 @@ def save_config(new_config: Dict[str, Any]) -> bool:
             or config.llm.model,
             max_tokens=int(new_config.get("MAX_TOKEN", config.llm.max_tokens)),
             temperature=float(new_config.get("TEMPERATURE", config.llm.temperature)),
+            fallback_routes=fallback_routes,
         )
 
         media_settings = MediaSettings(
@@ -451,6 +531,32 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                         },
                     },
                 },
+                "operit_settings": {
+                    "title": "Operit 安卓手机控制",
+                    "settings": {
+                        "enabled": {"value": operit_settings.enabled, "type": "boolean", "description": "启用微信到 Operit 的手机控制桥接"},
+                        "base_url": {"value": operit_settings.base_url, "type": "string", "description": "Operit 外部 HTTP API 地址"},
+                        "bearer_token": {"value": operit_settings.bearer_token, "type": "string", "description": "Operit Bearer Token", "is_secret": True},
+                        "allowed_senders": {"value": operit_settings.allowed_senders, "type": "array", "description": "允许控制手机的微信发送者 ID 或昵称"},
+                        "allowed_chats": {"value": operit_settings.allowed_chats, "type": "array", "description": "可选的微信会话白名单"},
+                        "allow_group_commands": {"value": operit_settings.allow_group_commands, "type": "boolean", "description": "允许群聊手机指令"},
+                        "command_prefixes": {"value": operit_settings.command_prefixes, "type": "array", "description": "手机指令前缀"},
+                        "request_timeout_seconds": {"value": operit_settings.request_timeout_seconds, "type": "number", "description": "手机任务超时秒数"},
+                        "show_floating": {"value": operit_settings.show_floating, "type": "boolean", "description": "执行时显示 Operit 浮窗"},
+                        "require_confirmation": {"value": operit_settings.require_confirmation, "type": "boolean", "description": "高风险操作要求确认码"},
+                        "confirmation_ttl_seconds": {"value": operit_settings.confirmation_ttl_seconds, "type": "number", "description": "确认码有效秒数"},
+                        "session_file": {"value": operit_settings.session_file, "type": "string", "description": "会话映射文件"}
+                    }
+                },
+                "nana_phone_settings": {
+                    "title": "娜娜自研手机端",
+                    "settings": {
+                        "enabled": {"value": nana_phone_settings.enabled, "type": "boolean", "description": "优先使用自研 NanaPhone"},
+                        "base_url": {"value": nana_phone_settings.base_url, "type": "string", "description": "NanaPhone HTTP 地址"},
+                        "pairing_token": {"value": nana_phone_settings.pairing_token, "type": "string", "description": "NanaPhone 配对密钥", "is_secret": True},
+                        "request_timeout_seconds": {"value": nana_phone_settings.request_timeout_seconds, "type": "number", "description": "手机动作超时秒数"}
+                    }
+                },
                 "llm_settings": {
                     "title": "大语言模型配置",
                     "settings": {
@@ -458,7 +564,7 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                             "value": llm_settings.provider,
                             "type": "string",
                             "description": "聊天 AI 提供方",
-                            "options": ["deepseek", "dify"],
+                            "options": ["openai_compatible", "deepseek", "dify"],
                         },
                         "api_key": {
                             "value": llm_settings.api_key,
@@ -505,6 +611,19 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                             "description": "AI回复的温度值",
                             "min": 0.0,
                             "max": 2.0,
+                        },
+                        **{
+                            f"fallback_{index}_{field}": metadata
+                            for index, route in enumerate(llm_settings.fallback_routes, 1)
+                            for field, metadata in {
+                                "enabled": {"value": route.enabled, "type": "boolean", "description": f"启用备用线路 {index}"},
+                                "name": {"value": route.name, "type": "string", "description": "线路名称"},
+                                "api_key": {"value": route.api_key, "type": "string", "description": "API 密钥", "is_secret": True},
+                                "base_url": {"value": route.base_url, "type": "string", "description": "OpenAI 兼容 API URL"},
+                                "model": {"value": route.model, "type": "string", "description": "模型 ID"},
+                                "complex_only": {"value": route.complex_only, "type": "boolean", "description": "仅复杂任务使用"},
+                                "max_tokens": {"value": route.max_tokens, "type": "number", "description": "最大输出 token"},
+                            }.items()
                         },
                     },
                 },

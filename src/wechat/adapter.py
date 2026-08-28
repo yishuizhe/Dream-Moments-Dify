@@ -61,7 +61,7 @@ class WxAuto4PollingAdapter:
     # Version 2 intentionally drops wxauto4's UI ``id`` from persisted tokens.
     # That id is recreated after switching chats and therefore is not suitable
     # for comparing snapshots across foreground polling rounds.
-    STATE_VERSION = 2
+    STATE_VERSION = 3
 
     def __init__(
         self,
@@ -556,22 +556,32 @@ class WxAuto4PollingAdapter:
             # Private chats often use the friend name as both title and sender.
             is_group = bool(sender and sender != chat_name and sender not in {"self", "me", "我"})
 
-        # Do not use raw.id here. wxauto4 documents it as a UI identifier that
-        # changes when the chat UI is switched. Foreground polling switches the
-        # UI every round, so using it would make every snapshot look unrelated.
-        token_source = json.dumps(
-            {
-                "sender": sender,
-                "content": content,
-                "kind": kind,
-                "attr": attr,
-                "is_quote": is_quote,
-                "quoted_sender": quoted_sender,
-                "quoted_content": quoted_content,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        # The 4.1.12+ database backend exposes stable local ids. Prefer those so
+        # two identical consecutive messages are not collapsed. wxauto4's UI
+        # ``id`` remains intentionally excluded because it changes on chat
+        # switches.
+        local_id = getattr(raw, "local_id", None)
+        sort_seq = getattr(raw, "sort_seq", None)
+        if local_id is not None or sort_seq is not None:
+            token_source = json.dumps(
+                {"local_id": local_id, "sort_seq": sort_seq},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        else:
+            token_source = json.dumps(
+                {
+                    "sender": sender,
+                    "content": content,
+                    "kind": kind,
+                    "attr": attr,
+                    "is_quote": is_quote,
+                    "quoted_sender": quoted_sender,
+                    "quoted_content": quoted_content,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         token = hashlib.sha256(token_source.encode("utf-8")).hexdigest()
         message = IncomingMessage(
             chat_name=chat_name,

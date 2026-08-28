@@ -38,20 +38,37 @@ def thinking_delay(text: str) -> float:
 
 
 def humanize_text(reply: str) -> str:
-    """Remove common synthetic-chat markers without inventing a new persona."""
+    """Remove robotic markers while preserving light, characterful warmth."""
     value = re.sub(r"^(好的[，,。.]?\s*)", "", str(reply or "").strip())
     value = re.sub(r"作为AI[，,。:：]?", "", value, flags=re.I)
     value = re.sub(r"\s*(综上所述|总的来说)[，,：:]?\s*", "", value)
-    value = re.sub(r"^(?:诶嘿|诶|哇|咦|嗯呢|哈哈)[，,、。！？!?~～\s]*", "", value)
-    value = re.sub(
-        r"^(?:被你(?:看出来|发现)啦|好有氛围|太厉害了|好棒|太棒了|真棒)"
-        r"[，,、。！？!?~～\s]*",
-        "",
-        value,
-    )
-    value = value.replace("～", "")
-    value = re.sub(r"([。！？!?])(?:[~～]+)", r"\1", value)
+    # A single playful opening or wave can sound human; only collapse excess.
+    value = re.sub(r"([~～])\1+", r"\1", value)
+    value = re.sub(r"([!！?？])\1{2,}", r"\1\1", value)
     value = re.sub(r"[ \t]{2,}", " ", value).strip()
+    return value
+
+
+def warm_short_reply(reply: str, user_text: str, sender_name: str = "") -> str:
+    """Warm up only unmistakably cold acknowledgements and greetings."""
+    value = str(reply or "").strip()
+    incoming = re.sub(r"[@＠\s\u2005]+", "", str(user_text or "")).lower()
+    incoming = incoming.replace("娜娜", "")
+    compact_reply = re.sub(r"[\s，,。.!！?？~～]+", "", value)
+    familiar = "易师傅" if str(sender_name or "").strip() == "易水哲" else ""
+
+    if re.fullmatch(r"(?:在吗|在么|在不在|人呢|在哪)", incoming):
+        if compact_reply in {"在", "在呢", "嗯在呢", "我在", "在的"}:
+            if familiar:
+                return random.choice((
+                    "在呀，易师傅一叫我就冒泡啦～",
+                    "在呢，怎么突然来点我名呀？",
+                ))
+            return random.choice(("在呀，怎么突然来点我名啦～", "在呢，你说嘛。"))
+
+    if re.fullmatch(r"(?:你好|嗨|早上好|早安|晚上好|晚安)", incoming):
+        if len(compact_reply) <= 6:
+            return random.choice(("你好呀，今天也来找我啦～", "我在呢，今天过得怎么样呀？"))
     return value
 
 

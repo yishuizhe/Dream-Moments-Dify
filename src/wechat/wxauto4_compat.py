@@ -356,12 +356,21 @@ def _compat_get_my_info(window: Any) -> dict[str, str]:
 
 
 def create_wechat_client(*, ads: bool = False) -> Any:
-    """Create a free wxauto4 client with WeChat 4.1.11 compatibility."""
-
-    from wxauto4 import WeChat
+    """Create the matching free client for the installed WeChat version."""
 
     ensure_wechat_main_window()
     version = detect_wechat_version()
+    if version and version >= (4, 1, 12, 0):
+        from .replica_compat import create_replica_client
+
+        logger.info(
+            "Detected WeChat %s; using the 4.1.12+ database/UIA hybrid backend",
+            ".".join(map(str, version)),
+        )
+        return create_replica_client()
+
+    from wxauto4 import WeChat
+
     if not needs_profile_popover_compat(version):
         return WeChat(ads=ads)
 

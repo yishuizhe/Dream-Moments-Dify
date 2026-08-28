@@ -29,6 +29,14 @@ class T(unittest.TestCase):
         cleaned, ok = strip("娜娜你好呀", "娜娜")
         self.assertTrue(ok)
         self.assertEqual(cleaned, "你好呀")
+    def test_invisible_character_inside_nickname_still_triggers(self):
+        cleaned, ok = strip("娜\u200b娜\u2005在么", "娜娜")
+        self.assertTrue(ok)
+        self.assertEqual(cleaned, "在么")
+    def test_visible_spacing_inside_nickname_still_triggers(self):
+        cleaned, ok = strip("娜 娜，在吗", "娜娜")
+        self.assertTrue(ok)
+        self.assertEqual(cleaned, "在吗")
     def test_at(self):
         cleaned, ok = strip("@娜娜 总结一下", "娜娜")
         self.assertTrue(ok)
