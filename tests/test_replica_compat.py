@@ -30,6 +30,7 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         db.search_contact.return_value = [
             {"username": "friend-id", "nick_name": "小明", "remark": ""}
         ]
+        db.get_nickname.return_value = "小明"
         db.get_messages.return_value = [
             {"local_id": 2, "sort_seq": 20, "sender_id": 7, "type": "文本", "content": "后"},
             {"local_id": 1, "sort_seq": 10, "sender_id": 7, "type": "文本", "content": "前"},
@@ -39,6 +40,15 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         messages = client.GetAllMessage()
         self.assertEqual([item.content for item in messages], ["前", "后"])
         self.assertEqual(messages[0].sender, "小明")
+
+    def test_persisted_id_follows_a_group_rename(self):
+        client, db = self.make_client()
+        client.BindContactId("旧群名", "room@chatroom")
+        db.get_nickname.return_value = "新群名"
+
+        self.assertEqual(client.ChatWith("旧群名"), "新群名")
+        self.assertEqual(client.ChatInfo()["chat_id"], "room@chatroom")
+        self.assertEqual(client.ChatInfo()["chat_name"], "新群名")
 
     def test_group_sender_prefix_is_removed_and_resolved(self):
         client, db = self.make_client()

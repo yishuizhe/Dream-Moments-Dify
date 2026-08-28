@@ -333,6 +333,7 @@ class MessageHandler:
             return
         is_group = bool(user_data.get("is_group", False))
         chat_id = str(user_data.get("chat_id") or queue_key.split("::member::", 1)[0])
+        reply_target = str(user_data.get("reply_target") or chat_id)
         items = []
         for item in raw_items:
             if isinstance(item, dict):
@@ -384,7 +385,7 @@ class MessageHandler:
             except Exception:
                 online = False
             reply = f"Status: {'online' if online else 'offline'}\nAI: {getattr(self, 'ai_provider', 'unknown')}\nQueue: {len(self.user_queues)}\nTime: {datetime.now():%Y-%m-%d %H:%M:%S}"
-            self._send_text_reply(chat_id, reply)
+            self._send_text_reply(reply_target, reply)
             self._record_assistant_reply(chat_id, reply, is_group)
             return
         # 识图失败时直接老实说，禁止模型编造图片内容
@@ -394,7 +395,7 @@ class MessageHandler:
             detail = latest_content.replace("IMAGE_RECOGNITION_FAILED:", "").strip()
             reply = honest_image_failure_reply(detail)
             logger.warning("Image recognition failed; sending honest reply")
-            self._send_text_reply(chat_id, reply)
+            self._send_text_reply(reply_target, reply)
             self._record_assistant_reply(chat_id, reply, is_group)
             return
         if latest_content == "查看我的记忆":
@@ -403,13 +404,13 @@ class MessageHandler:
                 "我记得你最近说过：\n" + "\n".join(f"- {item}" for item in memories)
                 if memories else "我还没有保存你的本地记忆。"
             )
-            self._send_text_reply(chat_id, reply)
+            self._send_text_reply(reply_target, reply)
             self._record_assistant_reply(chat_id, reply, is_group)
             return
         if latest_content == "清除我的记忆":
             self.history_store.clear_memory(identity_key)
             reply = "已清除只属于你的本地记忆。"
-            self._send_text_reply(chat_id, reply)
+            self._send_text_reply(reply_target, reply)
             self._record_assistant_reply(chat_id, reply, is_group)
             return
 
@@ -449,20 +450,20 @@ class MessageHandler:
                         logger.info("Prepared temporary voice output (%s bytes)", os.path.getsize(abs_path))
                         send_voice = getattr(self.wx, "send_voice", None)
                         if callable(send_voice):
-                            _, sent_native_voice = send_voice(chat_id, abs_path)
+                            _, sent_native_voice = send_voice(reply_target, abs_path)
                             if not sent_native_voice:
                                 logger.info("Native WeChat voice bar unavailable; using text fallback")
                         sent_voice = bool(sent_native_voice)
                         if not sent_voice:
-                            self._send_text_reply(chat_id, reply)
+                            self._send_text_reply(reply_target, reply)
                         if sent_voice:
                             logger.info("Native WeChat voice bar sent")
                         else:
                             logger.info("Voice request handled with text fallback")
                     except Exception as e:
                         logger.error("发送语音失败: %s", str(e), exc_info=True)
-                        self._send_text_reply(chat_id, reply)
-                        self._send_text_reply(chat_id, "语音条现在发不出去，我先用文字回你。")
+                        self._send_text_reply(reply_target, reply)
+                        self._send_text_reply(reply_target, "语音条现在发不出去，我先用文字回你。")
                     finally:
                         try:
                             # keep a short moment for WeChat to pick up the file
@@ -475,13 +476,13 @@ class MessageHandler:
                 else:
                     detail = getattr(self.voice_handler, "last_error", "") or "未知原因"
                     logger.error("语音生成失败: %s", detail)
-                    self._send_text_reply(chat_id, reply)
-                    self._send_text_reply(chat_id, f"语音合成失败（{detail}），我先用文字回复你。")
+                    self._send_text_reply(reply_target, reply)
+                    self._send_text_reply(reply_target, f"语音合成失败（{detail}），我先用文字回复你。")
 
                 if sent_voice:
                     # 再补一句文字，避免用户以为机器人没反应；微信免费接口通常以文件形式发出音频。
                     self._send_text_reply(
-                        chat_id,
+                        reply_target,
                         "（已发送语音条）" if sent_native_voice else "（已发送音频文件，当前适配器不支持语音条）",
                     )
 
@@ -496,7 +497,7 @@ class MessageHandler:
                 image_path = self.image_handler.get_random_image()
                 if image_path:
                     try:
-                        self.wx.SendFiles(filepath=image_path, who=chat_id)
+                        self.wx.SendFiles(filepath=image_path, who=reply_target)
                         reply = "给你找了一张好看的图片。"
                     except Exception as e:
                         logger.error("发送图片失败: %s", str(e))
@@ -510,7 +511,7 @@ class MessageHandler:
                 else:
                     reply = "暂时没有获取到图片，请稍后再试。"
 
-                self.wx.SendMsg(msg=reply, who=chat_id)
+                self.wx.SendMsg(msg=reply, who=reply_target)
                 self._record_assistant_reply(chat_id, reply, is_group)
                 return
 
@@ -520,7 +521,7 @@ class MessageHandler:
                 image_path = self.image_handler.generate_image(merged_message)
                 if image_path:
                     try:
-                        self.wx.SendFiles(filepath=image_path, who=chat_id)
+                        self.wx.SendFiles(filepath=image_path, who=reply_target)
                         reply = "这是按照主人您的要求生成的图片\\(^o^)/~"
                     except Exception as e:
                         logger.error(f"发送生成图片失败: {str(e)}")
@@ -532,12 +533,12 @@ class MessageHandler:
                         except Exception as e:
                             logger.error(f"删除临时图片失败: {str(e)}")
 
-                    self.wx.SendMsg(msg=reply, who=chat_id)
+                    self.wx.SendMsg(msg=reply, who=reply_target)
                     self._record_assistant_reply(chat_id, reply, is_group)
                     return
 
                 unavailable = self.image_handler.get_unavailable_message()
-                self._send_text_reply(chat_id, unavailable)
+                self._send_text_reply(reply_target, unavailable)
                 self._record_assistant_reply(chat_id, unavailable, is_group)
                 return
 
@@ -571,7 +572,7 @@ class MessageHandler:
 
                 sleep_before_reply(reply)
                 # Automatically split by punctuation instead of model backslashes.
-                self._send_text_reply(chat_id, reply)
+                self._send_text_reply(reply_target, reply)
                 self._record_assistant_reply(chat_id, reply, is_group)
 
                 # 检查回复中是否包含情感关键词并发送表情包
@@ -594,7 +595,7 @@ class MessageHandler:
                             emoji_path = self.emoji_handler.get_emotion_emoji(reply, chat_id=chat_id)
                             if emoji_path:
                                 try:
-                                    self.wx.SendFiles(filepath=emoji_path, who=chat_id)
+                                    self.wx.SendFiles(filepath=emoji_path, who=reply_target)
                                     logger.info(f"已发送情感表情包: {emoji_path}")
                                 except Exception as e:
                                     logger.error(f"发送表情包失败: {str(e)}")
@@ -625,6 +626,7 @@ class MessageHandler:
         is_group: bool = False,
         *,
         message_items: Optional[List[dict]] = None,
+        reply_target: str = "",
     ):
         """Add structured messages to the debounce queue.
 
@@ -652,6 +654,7 @@ class MessageHandler:
                     "username": latest.get("sender_id", username),
                     "is_group": bool(is_group),
                     "chat_id": str(chat_id),
+                    "reply_target": str(reply_target or chat_id),
                 }
                 self.user_queues[queue_key]["timer"].start()
             else:
@@ -662,5 +665,6 @@ class MessageHandler:
                 queue["username"] = latest.get("sender_id", username)
                 queue["is_group"] = bool(is_group)
                 queue["chat_id"] = str(chat_id)
+                queue["reply_target"] = str(reply_target or chat_id)
                 queue["timer"] = threading.Timer(5.0, self.process_messages, args=[queue_key])
                 queue["timer"].start()

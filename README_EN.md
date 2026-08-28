@@ -9,6 +9,7 @@ This project preserves the original attribution and GPLv3 license. It does not b
 ## Highlights
 
 - Automatic WeChat backend selection: `wxauto4==41.1.2` for `4.1.11.x`, and `wechatauto-replica==1.1.9` for the self-rendered UI in WeChat `4.1.12+`.
+- Group renames keep working: listeners, history, and per-member memory use the stable WeChat conversation ID while the current display name is used for sending.
 - `GetSession()`-driven polling: chats are opened once to build a baseline, then only unread or preview-changed whitelisted chats are opened.
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
 - Enforces normal punctuation and concise sentences, repairs obvious unpunctuated replies, and automatically splits long replies into natural WeChat bubbles without requiring model backslashes.

@@ -22,6 +22,7 @@ _GROUP_SENDER_RE = re.compile(r"^(wxid_[0-9A-Za-z_]+):\s*\n")
 class ReplicaMessage:
     content: str
     sender: str
+    sender_id: str
     type: str
     attr: str
     local_id: int | str | None = None
@@ -84,16 +85,32 @@ class ReplicaWeChatClient:
     def GetMyInfo(self) -> dict[str, str]:  # noqa: N802
         return dict(self.myinfo)
 
-    def _display_name(self, username: str) -> str:
-        if username in self._username_to_name:
+    def _display_name(self, username: str, *, refresh: bool = False) -> str:
+        if username in self._username_to_name and not refresh:
             return self._username_to_name[username]
         if username == "filehelper":
             name = "文件传输助手"
         else:
             name = str(self._db.get_nickname(username) or username)
+        previous = self._username_to_name.get(username, "")
         self._username_to_name[username] = name
+        if previous and previous != name:
+            # Keep the old display name as an alias for configurations that
+            # have not yet been edited after a group rename.
+            self._name_to_username.setdefault(previous, username)
         self._name_to_username.setdefault(name, username)
         return name
+
+    def BindContactId(self, name: str, username: str) -> None:  # noqa: N802
+        """Restore a persisted display-name → stable-id binding."""
+
+        name = str(name or "").strip()
+        username = str(username or "").strip()
+        if name and username:
+            self._name_to_username[name] = username
+
+    def ResolveContactId(self, name: str) -> str:  # noqa: N802
+        return self._resolve_username(name)
 
     def _resolve_username(self, name: str) -> str:
         name = str(name or "").strip()
@@ -136,11 +153,13 @@ class ReplicaWeChatClient:
             return None
         self._current_name = str(who)
         self._current_username = username
+        self._current_name = self._display_name(username, refresh=True) or self._current_name
         return self._current_name
 
     def ChatInfo(self) -> dict[str, str]:  # noqa: N802
         return {
             "chat_name": self._current_name,
+            "chat_id": self._current_username,
             "chat_type": "group" if self._current_username.endswith("@chatroom") else "friend",
         }
 
@@ -150,7 +169,7 @@ class ReplicaWeChatClient:
             username = str(row.get("username") or "")
             result.append(
                 {
-                    "name": self._display_name(username),
+                    "name": self._display_name(username, refresh=True),
                     "username": username,
                     "content": row.get("summary") or "",
                     "time": row.get("last_time") or 0,
@@ -175,6 +194,7 @@ class ReplicaWeChatClient:
 
         if is_self:
             sender = self.nickname or "我"
+            stable_sender = self.myinfo.get("username") or "self"
         elif is_group:
             sender_username = str(row.get("sender_username") or "")
             prefix = _GROUP_SENDER_RE.match(content)
@@ -182,8 +202,10 @@ class ReplicaWeChatClient:
                 sender_username = sender_username or prefix.group(1)
                 content = content[prefix.end() :]
             sender = self._display_name(sender_username) if sender_username else self._current_name
+            stable_sender = sender_username or str(sender_id or sender)
         else:
             sender = self._current_name
+            stable_sender = self._current_username
 
         raw_type = str(row.get("type") or "friend")
         is_system = raw_type in {"系统消息", "时间", "notice", "system"}
@@ -191,6 +213,7 @@ class ReplicaWeChatClient:
         return ReplicaMessage(
             content=content,
             sender=sender,
+            sender_id=stable_sender,
             type=raw_type,
             attr=attr,
             local_id=row.get("local_id"),
