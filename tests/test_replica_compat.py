@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from wechat.replica_compat import ReplicaWeChatClient
+from wechat.replica_compat import ReplicaWeChatClient, _safe_ocr_name_matches
 
 
 class ReplicaCompatibilityTests(unittest.TestCase):
@@ -116,6 +116,23 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         self.assertEqual(message.sender, "成员")
         self.assertEqual(message.content, "娜娜，出来吧")
 
+    def test_group_sender_id_one_is_local_account(self):
+        client, db = self.make_client()
+        client.BindContactId("测试群", "room@chatroom")
+        db.get_nickname.return_value = "测试群"
+        db.get_messages.return_value = [
+            {
+                "local_id": 5,
+                "sort_seq": 50,
+                "sender_id": 1,
+                "type": "文本",
+                "content": "我在群里发的",
+            }
+        ]
+
+        client.ChatWith("测试群")
+        self.assertEqual(client.GetAllMessage()[0].attr, "self")
+
     def test_session_fields_match_polling_adapter(self):
         client, db = self.make_client()
         db.get_nickname.return_value = "小明"
@@ -132,6 +149,69 @@ class ReplicaCompatibilityTests(unittest.TestCase):
                 "unread_count": 2,
             },
         )
+
+    def test_sidebar_ocr_accepts_one_clipped_group_name_edge(self):
+        self.assertTrue(
+            _safe_ocr_name_matches("以开心摸鱼小分", "开心摸鱼小分队")
+        )
+        self.assertFalse(_safe_ocr_name_matches("小明", "开心摸鱼小分队"))
+
+    def test_text_send_requires_target_and_database_confirmation(self):
+        client, _db = self.make_client()
+        sender = MagicMock()
+        sender.open_chat.return_value = True
+        sender._chat_is_open.return_value = True
+        sender.right_pane_left = 200
+        sender.render_h = 800
+        sender.render_w = 1000
+        sender.focus_input.return_value = True
+        client._uia_sender = sender
+        client._resolve_username = MagicMock(return_value="room@chatroom")
+        client._message_ids = MagicMock(return_value={(1, 1)})
+        client._wait_for_sent_text = MagicMock(return_value=True)
+
+        self.assertTrue(client.SendMsg("你好", "测试群"))
+
+        sender.open_chat.assert_called_once_with("测试群", exact=True)
+        self.assertEqual(sender._chat_is_open.call_count, 3)
+        client._wait_for_sent_text.assert_called_once_with(
+            "room@chatroom", {(1, 1)}, "你好"
+        )
+
+    def test_text_send_aborts_if_target_changes_before_enter(self):
+        client, _db = self.make_client()
+        sender = MagicMock()
+        sender.open_chat.return_value = True
+        sender._chat_is_open.side_effect = [True, True, False]
+        sender.right_pane_left = 200
+        sender.render_h = 800
+        sender.render_w = 1000
+        sender.focus_input.return_value = True
+        client._uia_sender = sender
+        client._resolve_username = MagicMock(return_value="room@chatroom")
+        client._message_ids = MagicMock(return_value=set())
+
+        with self.assertRaisesRegex(RuntimeError, "输入过程中发生变化"):
+            client.SendMsg("不能发错", "测试群")
+
+        keys = sender._input.key.call_args_list
+        self.assertGreaterEqual(len(keys), 5)
+        self.assertNotIn(13, [call.args[0] for call in keys])
+
+    @patch("wechat.replica_compat.time.sleep", return_value=None)
+    @patch("wechat.replica_compat.time.monotonic", side_effect=[0, 0, 7])
+    def test_group_send_confirmation_rejects_incoming_same_text(self, _clock, _sleep):
+        client, db = self.make_client()
+        db.get_messages.return_value = [
+            {
+                "local_id": 2,
+                "sort_seq": 20,
+                "sender_id": 7,
+                "content": "你好",
+            }
+        ]
+
+        self.assertFalse(client._wait_for_sent_text("room@chatroom", set(), "你好"))
 
 
 if __name__ == "__main__":

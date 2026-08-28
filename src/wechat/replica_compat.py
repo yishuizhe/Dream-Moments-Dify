@@ -10,12 +10,31 @@ project's polling adapter.
 from __future__ import annotations
 
 import re
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
 _GROUP_SENDER_RE = re.compile(r"^(wxid_[0-9A-Za-z_]+):\s*\n")
+
+
+def _safe_ocr_name_matches(ocr_name: str, target: str) -> bool:
+    """Tolerate one clipped/extra edge character without broad fuzzy matches."""
+
+    observed = re.sub(r"\s+", "", str(ocr_name or ""))
+    expected = re.sub(r"\s+", "", str(target or ""))
+    if not observed or not expected:
+        return False
+    if observed == expected or observed in expected or expected in observed:
+        return True
+    if len(expected) < 5:
+        return False
+    # WeChat often clips the first or final glyph and sometimes joins one
+    # neighbouring glyph from the avatar/time column.  Require almost the
+    # complete target so similar short contact names cannot collide.
+    return expected[:-1] in observed or expected[1:] in observed
 
 
 @dataclass(slots=True)
@@ -58,7 +77,8 @@ class ReplicaWeChatClient:
             ) from exc
 
         self._db = WeChatDB()
-        self._gui: Any = None
+        self._uia_sender: Any = None
+        self._send_lock = threading.RLock()
         self._current_name = ""
         self._current_username = ""
         self._name_to_username: dict[str, str] = {}
@@ -73,11 +93,140 @@ class ReplicaWeChatClient:
 
     @property
     def _sender(self) -> Any:
-        if self._gui is None:
-            from wechatauto import WeChatGUI
+        if self._uia_sender is None:
+            from wechatauto.guia import WeChatGUI
 
-            self._gui = WeChatGUI()
-        return self._gui
+            class SafeWeChatGUI(WeChatGUI):
+                """Use OCR only for target confirmation, never window cleanup."""
+
+                def calibrate_layout(self, save: bool = True) -> bool:
+                    return False
+
+                def _get_uia(self):
+                    # 4.1.12.55 exposes only an empty render shell through UIA.
+                    return None
+
+                def ensure_visible(self) -> bool:
+                    self.bring_to_front(keep_topmost=False)
+                    self._update_render_rect()
+                    return self.desktop_available()
+
+                @staticmethod
+                def _name_matches(ocr_name: str, target: str) -> bool:
+                    return _safe_ocr_name_matches(ocr_name, target)
+
+                def _chat_is_open(self, name: str) -> bool:
+                    """Confirm only against the right-pane title.
+
+                    The upstream OCR box starts 60 pixels inside the session
+                    sidebar.  A visible group name there can therefore make an
+                    unrelated private chat look like the requested group.  A
+                    false positive is unsafe for a sender, so keep the box
+                    strictly to the right pane even if that means retrying an
+                    occasional hard-to-read title.
+                    """
+
+                    try:
+                        self._update_render_rect()
+                        results = self.ocr_zoomed(
+                            (self.right_pane_left, 0, self.render_w, 185),
+                            scale=3,
+                        )
+                        title = "".join(text.strip() for text, *_ in results)
+                        normalized_name = re.sub(r"\s+", "", str(name or ""))
+                        normalized_title = re.sub(r"\s+", "", title)
+                        if not normalized_name or not normalized_title:
+                            return False
+                        if normalized_name in normalized_title:
+                            return True
+                        if len(normalized_name) >= 4:
+                            fragments = (
+                                normalized_name[1:4],
+                                normalized_name[2:5],
+                                normalized_name[-3:],
+                            )
+                        elif len(normalized_name) >= 2:
+                            fragments = (normalized_name, normalized_name[-2:])
+                        else:
+                            fragments = (normalized_name,)
+                        return any(fragment in normalized_title for fragment in fragments)
+                    except Exception:
+                        return False
+
+            self._uia_sender = SafeWeChatGUI()
+        return self._uia_sender
+
+    def _open_send_target(self, who: str) -> Any:
+        sender = self._sender
+        if not sender.open_chat(who, exact=True):
+            raise RuntimeError(f"无法打开微信发送目标: {who}")
+        if not sender._chat_is_open(who):
+            raise RuntimeError(f"微信发送目标校验失败: {who}")
+        return sender
+
+    @staticmethod
+    def _assert_send_target(sender: Any, who: str) -> None:
+        """Abort before Enter if focus is no longer on the requested chat."""
+
+        if not sender._chat_is_open(who):
+            raise RuntimeError(f"微信发送目标在输入过程中发生变化: {who}")
+
+    @staticmethod
+    def _safe_input_box(sender: Any) -> tuple[int, int, int, int]:
+        return (
+            sender.right_pane_left,
+            sender.render_h - int(sender.render_h * 0.214),
+            sender.render_w,
+            sender.render_h - int(sender.render_h * 0.082),
+        )
+
+    def _message_ids(self, username: str) -> set[tuple[Any, Any]]:
+        return {
+            (row.get("local_id"), row.get("sort_seq"))
+            for row in (self._db.get_messages(username, limit=10) or [])
+        }
+
+    def _wait_for_sent_text(
+        self, username: str, before: set[tuple[Any, Any]], text: str
+    ) -> bool:
+        is_group = username.endswith("@chatroom")
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            for row in self._db.get_messages(username, limit=10) or []:
+                token = (row.get("local_id"), row.get("sort_seq"))
+                if token in before or str(row.get("content") or "") != text:
+                    continue
+                sender_id = row.get("sender_id")
+                content = str(row.get("content") or "")
+                is_outgoing = (
+                    sender_id in {1, "1"} and not _GROUP_SENDER_RE.match(content)
+                    if is_group
+                    else sender_id in {1, "1"}
+                )
+                if is_outgoing:
+                    return True
+            time.sleep(0.25)
+        return False
+
+    def _wait_for_sent_file(
+        self, username: str, before: set[tuple[Any, Any]]
+    ) -> bool:
+        is_group = username.endswith("@chatroom")
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            for row in self._db.get_messages(username, limit=10) or []:
+                token = (row.get("local_id"), row.get("sort_seq"))
+                if token in before:
+                    continue
+                sender_id = row.get("sender_id")
+                content = str(row.get("content") or "")
+                if is_group:
+                    if sender_id in {1, "1"} and not _GROUP_SENDER_RE.match(content):
+                        return True
+                elif sender_id in {1, "1"}:
+                    return True
+            time.sleep(0.25)
+        return False
 
     def IsOnline(self) -> bool:  # noqa: N802
         return bool(self.myinfo.get("username"))
@@ -191,16 +340,13 @@ class ReplicaWeChatClient:
         sender_id = row.get("sender_id")
         is_group = self._current_username.endswith("@chatroom")
         group_sender_prefix = _GROUP_SENDER_RE.match(content) if is_group else None
-        # In current WeChat 4.1.12 private-chat tables, direction ids are the
-        # reverse of the legacy replica assumption: 2 is the remote party and
-        # 1 is the local account. Group tables still use 2 for the local
-        # account and member-specific ids for incoming messages.
+        # In current WeChat 4.1.12 tables, sender_id=1 is the local account.
+        # Group members use other ids and plain-text rows normally include the
+        # real member wxid prefix.
         if is_group:
-            # Some 4.1.12 group rows still report sender_id=2 for an incoming
-            # member, but embed the real member wxid at the start of content.
-            # That explicit prefix is a stronger direction signal.
             is_self = not group_sender_prefix and (
-                sender_id == 2 or str(sender_id) == self.myinfo.get("username")
+                sender_id in {1, "1"}
+                or str(sender_id) == self.myinfo.get("username")
             )
         else:
             is_self = sender_id in {1, "1"} or str(sender_id) == self.myinfo.get("username")
@@ -241,13 +387,67 @@ class ReplicaWeChatClient:
         at: str | list[str] | None = None,
         **_: Any,
     ) -> Any:
-        if at:
-            return self._sender.at_member(at, msg, who)
-        return self._sender.send_msg(msg, who)
+        with self._send_lock:
+            username = self._resolve_username(who)
+            if not username:
+                raise RuntimeError(f"无法解析微信发送目标: {who}")
+            before = self._message_ids(username)
+            sender = self._open_send_target(who)
+            box = self._safe_input_box(sender)
+            if not sender.focus_input(box):
+                raise RuntimeError(f"微信输入框不可用: {who}")
+            self._assert_send_target(sender, who)
+            from wechatauto.guia import VK_A, VK_DELETE, VK_RETURN, VK_V
+
+            sender.set_clipboard(msg)
+            sender._input.key(VK_A, ctrl=True)
+            sender._input.key(VK_DELETE)
+            sender._input.key(VK_V, ctrl=True)
+            time.sleep(0.35)
+            try:
+                self._assert_send_target(sender, who)
+            except Exception:
+                # Never leave a pending reply in the wrong conversation.
+                sender._input.key(VK_A, ctrl=True)
+                sender._input.key(VK_DELETE)
+                raise
+            sender._input.key(VK_RETURN)
+            if not self._wait_for_sent_text(username, before, msg):
+                raise RuntimeError(f"微信文字发送失败: {who}")
+            return True
 
     def SendFiles(self, filepath: str, who: str, **_: Any) -> Any:  # noqa: N802
         path = str(Path(filepath).expanduser().resolve())
-        return self._sender.send_file(path, who)
+        with self._send_lock:
+            username = self._resolve_username(who)
+            if not username:
+                raise RuntimeError(f"无法解析微信发送目标: {who}")
+            before = self._message_ids(username)
+            sender = self._open_send_target(who)
+            box = self._safe_input_box(sender)
+            if not sender.focus_input(box):
+                raise RuntimeError(f"微信输入框不可用: {who}")
+            self._assert_send_target(sender, who)
+            from wechatauto.guia import WeChatGUI
+
+            if not WeChatGUI.copy_files_to_clipboard([path]):
+                raise RuntimeError(f"无法复制待发送文件: {path}")
+            from wechatauto.guia import VK_RETURN, VK_V
+
+            sender._input.key(VK_V, ctrl=True)
+            time.sleep(0.8)
+            try:
+                self._assert_send_target(sender, who)
+            except Exception:
+                from wechatauto.guia import VK_A, VK_DELETE
+
+                sender._input.key(VK_A, ctrl=True)
+                sender._input.key(VK_DELETE)
+                raise
+            sender._input.key(VK_RETURN)
+            if not self._wait_for_sent_file(username, before):
+                raise RuntimeError(f"微信文件发送失败: {who}")
+            return True
 
 
 def create_replica_client() -> ReplicaWeChatClient:
