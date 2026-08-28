@@ -719,19 +719,29 @@ def build_runtime() -> None:
     seed_known_group_chats()
     try:
         for identity in wechat_adapter.get_contact_identities():
-            aliases = [identity.get("configured_name", ""), *(identity.get("aliases") or [])]
+            aliases = [
+                identity.get("configured_name", ""),
+                identity.get("display_name", ""),
+                *(identity.get("aliases") or []),
+            ]
             stable_id = history_store.register_chat_identity(
                 identity.get("chat_id", ""),
                 identity.get("display_name", ""),
                 aliases=aliases,
                 is_group=bool(identity.get("is_group")),
             )
+            plugin_manager.migrate_chat_identity(stable_id, aliases)
             if identity.get("is_group"):
-                known_group_chats.add(str(identity.get("display_name") or ""))
+                for group_alias in [
+                    identity.get("display_name", ""),
+                    identity.get("configured_name", ""),
+                    *(identity.get("aliases") or []),
+                ]:
+                    if str(group_alias or "").strip():
+                        known_group_chats.add(str(group_alias).strip())
             logger.info(
-                "微信会话身份已绑定: %s -> %s",
+                "微信会话身份已绑定: %s",
                 identity.get("display_name", ""),
-                stable_id,
             )
     except Exception:
         logger.exception("绑定稳定微信会话身份失败，将在收到消息时重试")

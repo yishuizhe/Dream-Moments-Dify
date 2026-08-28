@@ -88,6 +88,23 @@ class PluginManagerTests(unittest.TestCase):
             manager = PluginManager(root)
             self.assertEqual(manager.plugins, [])
 
+    def test_migrates_chat_identity_for_supported_plugin(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_plugin(root, "plugin", name="plugin", body="return None")
+            manager = PluginManager(root)
+            calls = []
+            manager.plugins[0].instance.migrate_chat_identity = (
+                lambda stable_id, aliases: calls.append((stable_id, aliases))
+            )
+
+            manager.migrate_chat_identity("stable-group", ["old-name", "new-name"])
+
+            self.assertEqual(
+                [("stable-group", ["old-name", "new-name"])],
+                calls,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

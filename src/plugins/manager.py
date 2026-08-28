@@ -99,6 +99,22 @@ class PluginManager:
                     type(exc).__name__,
                 )
 
+    def migrate_chat_identity(self, stable_id: str, aliases: list[str]) -> None:
+        """Let plugins consolidate data that was keyed by a mutable chat name."""
+
+        for loaded in self.plugins:
+            migrate = getattr(loaded.instance, "migrate_chat_identity", None)
+            if not callable(migrate):
+                continue
+            try:
+                migrate(stable_id, aliases)
+            except Exception as exc:
+                self.logger.error(
+                    "External plugin %s chat migration failed (%s)",
+                    loaded.name,
+                    type(exc).__name__,
+                )
+
     def handle_group_message(
         self,
         *,
