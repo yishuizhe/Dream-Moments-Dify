@@ -22,6 +22,7 @@ class StartupCompatibilityTests(unittest.TestCase):
             (SRC / "config" / "config.json.template").read_text(encoding="utf-8")
         )
         template["categories"].pop("wechat_settings", None)
+        template["categories"].pop("operit_settings", None)
         llm = template["categories"]["llm_settings"]["settings"]
         llm.pop("dify_api_key", None)
         llm.pop("dify_base_url", None)
@@ -57,6 +58,37 @@ class StartupCompatibilityTests(unittest.TestCase):
         self.assertEqual(loaded.llm.max_tokens, 2000)
         self.assertEqual(loaded.llm.temperature, 1.0)
 
+    def test_old_config_without_fallback_routes_still_loads(self):
+        template = json.loads(
+            (SRC / "config" / "config.json.template").read_text(encoding="utf-8")
+        )
+        llm = template["categories"]["llm_settings"]["settings"]
+        for index in range(1, 4):
+            for suffix in (
+                "enabled", "name", "api_key", "base_url", "model",
+                "complex_only", "max_tokens",
+            ):
+                llm.pop(f"fallback_{index}_{suffix}", None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            template_path = Path(temp_dir) / "config.json.template"
+            config_path.write_text(json.dumps(template), encoding="utf-8")
+            template_path.write_text(json.dumps(template), encoding="utf-8")
+
+            class TempConfig(Config):
+                @property
+                def config_path(self) -> str:
+                    return str(config_path)
+
+                @property
+                def config_template_path(self) -> str:
+                    return str(template_path)
+
+            loaded = TempConfig()
+
+        self.assertEqual(loaded.llm.fallback_routes, [])
+
     def test_string_boolean_wechat_settings_are_parsed_safely(self):
         template = json.loads(
             (SRC / "config" / "config.json.template").read_text(encoding="utf-8")
@@ -84,6 +116,60 @@ class StartupCompatibilityTests(unittest.TestCase):
 
         self.assertFalse(loaded.wechat.process_existing_on_start)
         self.assertTrue(loaded.wechat.exact_match)
+
+    def test_old_config_without_operit_settings_is_secure_by_default(self):
+        template = json.loads(
+            (SRC / "config" / "config.json.template").read_text(encoding="utf-8")
+        )
+        template["categories"].pop("operit_settings", None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            template_path = Path(temp_dir) / "config.json.template"
+            config_path.write_text(json.dumps(template), encoding="utf-8")
+            template_path.write_text(json.dumps(template), encoding="utf-8")
+
+            class TempConfig(Config):
+                @property
+                def config_path(self) -> str:
+                    return str(config_path)
+
+                @property
+                def config_template_path(self) -> str:
+                    return str(template_path)
+
+            loaded = TempConfig()
+
+        self.assertFalse(loaded.operit.enabled)
+        self.assertEqual(loaded.operit.allowed_senders, [])
+        self.assertFalse(loaded.operit.allow_group_commands)
+        self.assertTrue(loaded.operit.require_confirmation)
+
+    def test_old_config_without_nana_phone_is_disabled_by_default(self):
+        template = json.loads(
+            (SRC / "config" / "config.json.template").read_text(encoding="utf-8")
+        )
+        template["categories"].pop("nana_phone_settings", None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            template_path = Path(temp_dir) / "config.json.template"
+            config_path.write_text(json.dumps(template), encoding="utf-8")
+            template_path.write_text(json.dumps(template), encoding="utf-8")
+
+            class TempConfig(Config):
+                @property
+                def config_path(self) -> str:
+                    return str(config_path)
+
+                @property
+                def config_template_path(self) -> str:
+                    return str(template_path)
+
+            loaded = TempConfig()
+
+        self.assertFalse(loaded.nana_phone.enabled)
+        self.assertEqual(loaded.nana_phone.pairing_token, "")
 
     def test_group_messages_are_skipped_when_bot_name_is_unavailable(self):
         import main
@@ -124,7 +210,7 @@ class StartupCompatibilityTests(unittest.TestCase):
 
             def handle_group_message(self, **message):
                 self.calls.append(message)
-                return "\u3010\u4eca\u65e5\u6c34\u738b\u3011"
+                return "\u3010\u4eca\u65e5\u6c34\u738b\u3011\n\U0001F947 \u5c0f\u660e: 12\u6761\n\U0001F948 \u5c0f\u7ea2: 9\u6761"
 
         class FakeMessage:
             sender = "\u7fa4\u6210\u5458"
@@ -140,8 +226,75 @@ class StartupCompatibilityTests(unittest.TestCase):
         bot = main.ChatBot(FakeMessageHandler(), object(), wechat, plugin_manager=plugins)
         bot.handle_wxauto_message(FakeMessage(), "\u6d4b\u8bd5\u7fa4", is_group=True)
 
-        self.assertEqual(wechat.sent, [("\u6d4b\u8bd5\u7fa4", "\u3010\u4eca\u65e5\u6c34\u738b\u3011")])
+        self.assertEqual(wechat.sent, [(
+            "\u6d4b\u8bd5\u7fa4",
+            "\u3010\u4eca\u65e5\u6c34\u738b\u3011\n\U0001F947 \u5c0f\u660e: 12\u6761\n\U0001F948 \u5c0f\u7ea2: 9\u6761",
+        )])
         self.assertEqual(len(plugins.calls), 1)
+        self.assertEqual(bot.user_queues, {})
+
+    def test_operit_command_bypasses_regular_ai_and_replies_to_same_chat(self):
+        import main
+
+        self.assertFalse(main.phone_result_is_successful("读取失败", "这次没查到"))
+        self.assertTrue(main.phone_result_is_successful("当前电量 86%", "还有86%"))
+
+        class FakeWeChat:
+            def __init__(self):
+                self.sent = []
+
+            def get_my_name(self):
+                return "机器人"
+
+            def send_text(self, chat_name, text):
+                self.sent.append((chat_name, text))
+
+        class FakeHistoryStore:
+            def __init__(self):
+                self.records = []
+                self.memories = []
+
+            def record_message(self, **message):
+                self.records.append(message)
+
+            def remember_user_message(self, **message):
+                self.memories.append(message)
+
+        class FakeBridge:
+            def handle_message(self, **message):
+                reply = message["process_result"](
+                    "用你的手机打开设置", "## raw\n- settings opened"
+                )
+                message["on_reply"](reply)
+                return True
+
+        class FakeMessageHandler:
+            def add_to_queue(self, **_kwargs):
+                raise AssertionError("Operit command must bypass the regular AI")
+
+            def generate_phone_result_response(self, **_kwargs):
+                return "我已经打开设置啦。"
+
+        class FakeMessage:
+            sender = "owner"
+            sender_id = "owner-id"
+            content = "手机：打开设置"
+
+        wechat = FakeWeChat()
+        history = FakeHistoryStore()
+        bot = main.ChatBot(
+            FakeMessageHandler(),
+            object(),
+            wechat,
+            history_store=history,
+            operit_bridge=FakeBridge(),
+        )
+        bot.handle_wxauto_message(FakeMessage(), "owner-chat", is_group=False)
+
+        self.assertEqual(wechat.sent, [("owner-chat", "我已经打开设置啦。")])
+        self.assertEqual(history.records[-1]["role"], "assistant")
+        self.assertIn("我自己的手机", history.memories[-1]["content"])
+        self.assertIn("我已经打开设置啦", history.memories[-1]["content"])
         self.assertEqual(bot.user_queues, {})
 
     def test_plain_group_message_is_observed_by_plugin_without_triggering_llm(self):

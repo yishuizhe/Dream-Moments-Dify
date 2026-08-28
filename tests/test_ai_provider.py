@@ -38,7 +38,7 @@ class AIProviderTests(unittest.TestCase):
         values.update(overrides)
         return MessageHandler(**values)
 
-    @patch("handlers.message.DeepSeekAI")
+    @patch("handlers.message.FailoverAI")
     def test_deepseek_provider_uses_direct_openai_compatible_client(self, client_cls):
         client = client_cls.return_value
         client.get_response.return_value = "ok"
@@ -46,12 +46,17 @@ class AIProviderTests(unittest.TestCase):
         handler = self.make_handler()
 
         client_cls.assert_called_once_with(
-            api_key="direct-key",
-            base_url="https://api.deepseek.com/v1/",
-            model="deepseek-chat",
-            max_token=4096,
-            temperature=0.8,
+            [{
+                "name": "主线路",
+                "enabled": True,
+                "api_key": "direct-key",
+                "base_url": "https://api.deepseek.com/v1/",
+                "model": "deepseek-chat",
+                "complex_only": False,
+            }],
             max_groups=5,
+            max_tokens=4096,
+            temperature=0.8,
         )
         self.assertEqual(handler.get_api_response("hello", "user-1"), "ok")
         client.get_response.assert_called_once()
@@ -71,7 +76,7 @@ class AIProviderTests(unittest.TestCase):
         )
         self.assertEqual(handler.ai_provider, "dify")
 
-    @patch("handlers.message.DeepSeekAI")
+    @patch("handlers.message.FailoverAI")
     def test_group_reply_does_not_mention_trigger_user(self, client_cls):
         client_cls.return_value.get_response.return_value = "plain reply"
         wechat = Mock()
@@ -102,7 +107,7 @@ class AIProviderTests(unittest.TestCase):
 
 
     @patch("handlers.message.time.sleep")
-    @patch("handlers.message.DeepSeekAI")
+    @patch("handlers.message.FailoverAI")
     def test_long_reply_is_split_into_multiple_bubbles(self, client_cls, sleep_mock):
         client_cls.return_value.get_response.return_value = (
             "\u591c\u73ed\u8981\u5230\u51e0\u70b9\u5440\u90a3\u73b0\u5728\u5077\u5077\u72af\u56f0"
@@ -140,7 +145,7 @@ class AIProviderTests(unittest.TestCase):
         self.assertEqual(sleep_mock.call_count, 3)
 
     def test_provider_requires_matching_credentials(self):
-        with self.assertRaisesRegex(ValueError, "DEEPSEEK_API_KEY"):
+        with self.assertRaisesRegex(ValueError, "API Key"):
             self.make_handler(api_key="")
 
 

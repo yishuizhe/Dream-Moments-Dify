@@ -25,6 +25,11 @@ class ReplyFormatterTests(unittest.TestCase):
         self.assertIn(FORMAT_MARKER, prompt)
         self.assertEqual(build_system_prompt(prompt).count(FORMAT_MARKER), 1)
 
+    def test_ordinary_chat_must_not_pretend_phone_action_happened(self):
+        prompt = build_system_prompt("system")
+        self.assertIn("不得猜测手机此刻的电量、型号", prompt)
+        self.assertIn("不能把行动承诺当作已经执行", prompt)
+
     def test_repairs_reported_unpunctuated_reply(self):
         sample = (
             "\u591c\u73ed\u8981\u5230\u51e0\u70b9\u5440\u90a3\u73b0\u5728\u5077\u5077\u72af\u56f0"

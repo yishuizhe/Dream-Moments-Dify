@@ -4,13 +4,11 @@ An experimental Windows WeChat 4 private chat bot derived from **My-Dream-Moment
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-This project preserves the original attribution and GPLv3 license. It does not bypass `wxautox4` Plus licensing; WeChat automation uses the public APIs of the free `wxauto4` package.
-
-This public release contains no API keys, WeChat names, contact lists, chat records, private character profiles, logs, screenshots, or local runtime state. The first launch creates an empty local configuration from the bundled template.
+This project preserves the original attribution and GPLv3 license. It does not bypass `wxautox4` Plus licensing; WeChat automation uses the open-source `wxauto4` and `wechatauto-replica` packages.
 
 ## Highlights
 
-- Free `wxauto4==41.1.2` adapter with WeChat `4.1.11.x` nickname compatibility.
+- Automatic WeChat backend selection: `wxauto4==41.1.2` for `4.1.11.x`, and `wechatauto-replica==1.1.9` for the self-rendered UI in WeChat `4.1.12+`.
 - `GetSession()`-driven polling: chats are opened once to build a baseline, then only unread or preview-changed whitelisted chats are opened.
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
 - Enforces normal punctuation and concise sentences, repairs obvious unpunctuated replies, and automatically splits long replies into natural WeChat bubbles without requiring model backslashes.
@@ -25,6 +23,22 @@ This public release contains no API keys, WeChat names, contact lists, chat reco
 ## Project history and retained capabilities
 
 Earlier versions added Dify integration, improved group-chat wake-up handling, and role-based conversations on top of the upstream projects. This update retains those capabilities while adding the free WeChat 4 polling adapter, direct DeepSeek-compatible access, and emotion GIFs. Existing modules for multi-turn context, prompts, message splitting/queues, images, and emoji handling remain available.
+
+## Usage examples
+
+These are interface examples from an earlier version. Personal identifiers have been permanently redacted. The current interface may differ slightly, and current group replies no longer automatically mention the triggering member.
+
+Private chat:
+
+![Private chat example](doc/img/solo.png)
+
+Group chat triggered with `@bot-name`:
+
+![Group mention example](doc/img/png1.png)
+
+Group chat triggered with the bot name at the beginning:
+
+![Group name trigger example](doc/img/png2.png)
 
 ## Requirements
 
@@ -49,7 +63,9 @@ DeepSeek Chat Completions does not provide `/images/generations`. Image generati
 
 ## Polling behavior
 
-The first polling round opens whitelisted chats to build message baselines. Later rounds inspect the conversation list without switching chats and only open a chat when its unread count or preview changes. Sending a reply/file still requires foreground UI automation and may briefly change focus.
+On WeChat `4.1.12+`, receiving uses the local message database and no longer switches chats. Sending a reply/file still requires foreground UI automation and may briefly change focus. WeChat `4.1.11.x` retains the original foreground polling path.
+
+The `4.1.12+` compatibility backend reads and decrypts the logged-in account's local WeChat database and may extract its local database key from the WeChat process. This work stays on the machine; messages selected for a reply are still sent to the AI provider you configure. Use it only on computers and accounts you own, and test with a secondary account first.
 
 Group chats can trigger the bot with `@bot-name`, by mentioning the bot name as a standalone name, or by quoting a previous bot message. Quoting another member does not trigger the bot. Replies are sent without automatically mentioning the sender. Group context preserves timestamps, sender names, and sender IDs so different members are not treated as one person.
 
@@ -88,7 +104,18 @@ A shared formatting rule is appended to character prompts, followed by a send-ti
 
 ## External group plugins
 
-Dream discovers `plugins/*/dream_plugin.py` at startup. Third-party plugin repositories, configurations, and databases are intentionally excluded from this repository. Review their code, license, and data handling before installing any plugin.
+Dream discovers `plugins/*/dream_plugin.py` at startup. Install GroupFun from the Dream project root:
+
+```powershell
+New-Item -ItemType Directory -Force plugins | Out-Null
+git clone https://github.com/yishuizhe/dow-group-fun.git plugins/GroupFun
+Copy-Item plugins\GroupFun\config.json.template plugins\GroupFun\config.json
+python run.py
+```
+
+GroupFun commands such as `今日水王`, `梗百科`, `我的成就`, and `娱乐帮助` do not require an `@bot-name` mention. The plugin observes ordinary text in whitelisted groups for local statistics and stores its SQLite database under `plugins/GroupFun/data/` by default. When no plugin returns a reply, Dream continues with its normal AI trigger rules.
+
+Runtime plugin repositories, private plugin configuration, and plugin databases are ignored by the Dream repository.
 
 ## Emoji assets
 

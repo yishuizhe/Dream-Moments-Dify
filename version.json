@@ -1,5 +1,5 @@
 {
-    "version": "2.0.0",
-    "last_update": "2026-07-30",
-    "description": "Privacy-safe public release with a clean configuration template, local-only console defaults, and updated reliability checks."
+    "version": "2.1.0",
+    "last_update": "2026-08-28",
+    "description": "WeChat 4.1.12+ compatibility, multi-provider AI failover, natural replies, and NanaPhone integration."
 }

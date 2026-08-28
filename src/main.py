@@ -19,12 +19,13 @@ from handlers.image_recognition import (
     recognition_failed,
 )
 from plugins.manager import PluginManager
+from services.operit import OperitBridge, OperitClient, OperitSessionStore
+from services.nana_phone import NanaPhoneClient, format_nana_phone_result
 from services.ai.moonshot import MoonShotAI
 from utils.cleanup import cleanup_pycache, CleanupUtils
 from utils.logger import LoggerConfig
 from colorama import init
 from utils.console import print_status, print_banner
-from utils.reply_formatter import split_summary_bubbles
 
 # 获取项目根目录
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,6 +63,20 @@ _IMAGE_REQUEST_MARKERS = (
 )
 _IMAGE_REQUEST_TIMEOUT_SECONDS = 90.0
 
+_PHONE_RESULT_FAILURE_MARKERS = (
+    "没查到", "没有查到", "未查到", "没读到", "未读取到", "无法读取",
+    "没能", "未能", "失败", "出错", "不太清楚", "没有给出可用结果",
+    "unknown", "error", "failed",
+)
+
+
+def phone_result_is_successful(raw_result: str, reply: str) -> bool:
+    """Only durable, grounded phone outcomes belong in long-term memory."""
+    combined = f"{str(raw_result or '')}\n{str(reply or '')}".lower()
+    return bool(combined.strip()) and not any(
+        marker.lower() in combined for marker in _PHONE_RESULT_FAILURE_MARKERS
+    )
+
 
 def is_explicit_image_request(content: str | None) -> bool:
     """Return whether the sender explicitly asked the bot to inspect an image."""
@@ -91,11 +106,17 @@ def strip_group_bot_mention(content: str, robot_name: str) -> tuple[str, bool]:
     if not name or not original.strip():
         return original, False
 
-    match = re.search(rf"[@＠]?\s*{re.escape(name)}", original)
+    # WeChat may insert thin spaces or zero-width formatting characters inside
+    # a visually continuous nickname. Match the displayed name flexibly.
+    invisible = "\u2005\u200b\u200c\u200d\ufeff"
+    compact_name = "".join(char for char in name if not char.isspace() and char not in invisible)
+    separator = rf"[\s{invisible}]*"
+    flexible_name = separator.join(re.escape(char) for char in compact_name)
+    match = re.search(rf"[@＠]?{separator}{flexible_name}", original, flags=re.I)
     if match:
         cleaned = original[:match.start()] + original[match.end():]
         cleaned = re.sub(r"\s{2,}", " ", cleaned)
-        cleaned = cleaned.strip(" \t,，、:：;；")
+        cleaned = cleaned.strip().strip(invisible).strip(" \t,，、:：;；").strip()
         return cleaned, True
 
     return original, False
@@ -110,6 +131,7 @@ class ChatBot:
         wechat,
         plugin_manager=None,
         history_store=None,
+        operit_bridge=None,
     ):
         self.message_handler = message_handler
         self.moonshot_ai = moonshot_ai
@@ -126,7 +148,66 @@ class ChatBot:
             else PluginManager(os.path.join(root_dir, "plugins"), logger=logger)
         )
         self.history_store = history_store or HistoryStore()
+        self.operit_bridge = operit_bridge
         logger.info(f"机器人名称: {self.robot_name}")
+
+    def _send_operit_reply(self, chat_name: str, text: str, is_group: bool) -> None:
+        """Return a bridge status/result to the originating WeChat conversation."""
+        reply = str(text or "").strip()
+        if not reply:
+            return
+        self.wx.send_text(chat_name, reply)
+        self.history_store.record_message(
+            chat_id=chat_name,
+            sender_id=self.robot_name or "bot",
+            sender_name=self.robot_name or "AI",
+            role="assistant",
+            content=reply,
+            is_group=bool(is_group),
+        )
+
+    def _process_operit_result(
+        self,
+        *,
+        chat_name: str,
+        sender_id: str,
+        sender_name: str,
+        identity_key: str,
+        is_group: bool,
+        command: str,
+        raw_result: str,
+    ) -> str:
+        """Rewrite a device trace as Nana and persist the useful interaction."""
+
+        # NanaPhone returns a signed, structured result. Render that result
+        # deterministically so the chat model cannot invent device details.
+        reply = format_nana_phone_result(raw_result)
+        if reply is None:
+            reply = self.message_handler.generate_phone_result_response(
+                user_request=command,
+                raw_result=raw_result,
+                user_id=identity_key or str(chat_name),
+                is_group=bool(is_group),
+                sender_name=sender_name,
+                identity_key=identity_key,
+                identity_aliases=config.behavior.context.identity_aliases,
+                chat_id=chat_name,
+            )
+        if phone_result_is_successful(raw_result, reply):
+            memory = (
+                f"对方曾让我用我自己的手机处理“{str(command).strip()}”；"
+                f"我处理后的结果是“{str(reply).strip()}”。"
+            )
+            self.history_store.remember_user_message(
+                identity_key=identity_key,
+                chat_id=chat_name,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                content=memory,
+            )
+        else:
+            logger.info("未把失败或无数据的手机结果写入长期记忆")
+        return reply
 
     def _has_pending_visual_request(self, queue_key: str) -> bool:
         with self.queue_lock:
@@ -238,6 +319,30 @@ class ChatBot:
                 content=content,
             )
 
+            # Explicit phone-control commands bypass the ordinary chat model.
+            # Operit runs in a daemon worker so a long phone task cannot stop
+            # wxauto4 from polling new WeChat messages.
+            if self.operit_bridge is not None and self.operit_bridge.handle_message(
+                chat_id=chatName,
+                sender_id=sender_id,
+                sender_name=username,
+                content=str(content),
+                is_group=bool(is_group),
+                on_reply=lambda reply: self._send_operit_reply(
+                    chatName, reply, bool(is_group)
+                ),
+                process_result=lambda command, raw_result: self._process_operit_result(
+                    chat_name=chatName,
+                    sender_id=sender_id,
+                    sender_name=username,
+                    identity_key=identity_key,
+                    is_group=bool(is_group),
+                    command=command,
+                    raw_result=raw_result,
+                ),
+            ):
+                return
+
             img_path = None
             is_emoji = False
             original_content = str(content or "")
@@ -264,13 +369,10 @@ class ChatBot:
                     is_self=bool(getattr(msg, 'is_self', False)),
                 )
                 if plugin_reply:
-                    bubbles = split_summary_bubbles(plugin_reply)
-                    if not bubbles:
-                        bubbles = [plugin_reply]
-                    for index, bubble in enumerate(bubbles):
-                        self.wx.send_text(chatName, bubble)
-                        if index < len(bubbles) - 1:
-                            time.sleep(random.uniform(0.35, 0.9))
+                    # Plugin cards/rankings are intentionally one WeChat
+                    # message. Splitting them makes titles and rows arrive as
+                    # unrelated bubbles.
+                    self.wx.send_text(chatName, str(plugin_reply).strip())
                     self.history_store.record_message(
                         chat_id=chatName,
                         sender_id=self.robot_name or "bot",
@@ -483,6 +585,9 @@ def seed_known_group_chats() -> None:
             continue
         if any(bool(item.get("is_group")) for item in recent):
             known_group_chats.add(str(name))
+    for name in ("我们都在用力的活着", "熬夜会猝", "牛马小家庭", "问渠安全实验室"):
+        if name in listen_list:
+            known_group_chats.add(name)
     if known_group_chats:
         logger.info("已预热群聊识别: %s", "、".join(sorted(known_group_chats)))
 
@@ -517,18 +622,73 @@ def build_runtime() -> None:
         wechat=wechat_adapter,
         history_store=history_store,
         identity_aliases=config.behavior.context.identity_aliases,
+        fallback_routes=[
+            {
+                "name": route.name,
+                "enabled": route.enabled,
+                "api_key": route.api_key,
+                "base_url": route.base_url,
+                "model": route.model,
+                "complex_only": route.complex_only,
+                "max_tokens": route.max_tokens,
+            }
+            for route in config.llm.fallback_routes
+        ],
     )
     plugin_manager = PluginManager(os.path.join(root_dir, "plugins"), logger=logger)
     plugin_manager.configure_services(
         history_store=history_store,
         ai_responder=message_handler.generate_summary_response,
     )
+    operit_bridge = None
+    try:
+        if config.nana_phone.enabled:
+            phone_client = NanaPhoneClient(
+                base_url=config.nana_phone.base_url,
+                pairing_token=config.nana_phone.pairing_token,
+                timeout_seconds=config.nana_phone.request_timeout_seconds,
+            )
+            bridge_enabled = True
+            bridge_name = "娜娜自研手机端"
+        else:
+            phone_client = OperitClient(
+                base_url=config.operit.base_url,
+                bearer_token=config.operit.bearer_token,
+                timeout_seconds=config.operit.request_timeout_seconds,
+                show_floating=config.operit.show_floating,
+            )
+            bridge_enabled = config.operit.enabled
+            bridge_name = "Operit 兼容通道"
+        operit_bridge = OperitBridge(
+            client=phone_client,
+            session_store=OperitSessionStore(
+                os.path.join(root_dir, config.operit.session_file)
+            ),
+            enabled=bridge_enabled,
+            allowed_senders=config.operit.allowed_senders,
+            allowed_chats=config.operit.allowed_chats,
+            allow_group_commands=config.operit.allow_group_commands,
+            command_prefixes=config.operit.command_prefixes,
+            require_confirmation=config.operit.require_confirmation,
+            confirmation_ttl_seconds=config.operit.confirmation_ttl_seconds,
+            logger=logger,
+        )
+        logger.info(
+            "%s: %s（授权发送者 %s 个，群聊 %s）",
+            bridge_name,
+            "已启用" if bridge_enabled else "未启用",
+            len(config.operit.allowed_senders),
+            "允许" if config.operit.allow_group_commands else "禁用",
+        )
+    except (TypeError, ValueError) as exc:
+        logger.error("Operit 配置无效: %s", exc)
     chat_bot = ChatBot(
         message_handler,
         moonshot_ai,
         wechat_adapter,
         plugin_manager=plugin_manager,
         history_store=history_store,
+        operit_bridge=operit_bridge,
     )
     seed_known_group_chats()
     try:
@@ -588,11 +748,17 @@ def message_listener():
             for msg in wechat_adapter.poll_once():
                 if msg.is_self or not msg.content:
                     continue
-                remember_chat_type(msg.chat_name, bool(msg.is_group))
+                # 免费 wxauto4 的 ChatInfo() 群聊识别不稳定，偶发把群聊判成私聊。
+                # 一旦按私聊处理会绕过昵称触发，机器人就会在群里“自己蹦出来说话”。
+                # 已确认的群聊一律按群聊处理，即使本轮被误判为私聊。
+                is_group = bool(msg.is_group)
+                if not is_group and str(msg.chat_name) in known_group_chats:
+                    is_group = True
+                remember_chat_type(msg.chat_name, is_group)
                 chat_bot.handle_wxauto_message(
                     msg,
                     msg.chat_name,
-                    is_group=msg.is_group,
+                    is_group=is_group,
                 )
         except Exception as exc:
             logger.error(f"微信轮询失败: {str(exc)}", exc_info=True)

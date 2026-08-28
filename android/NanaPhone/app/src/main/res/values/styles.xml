@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.NanaPhone" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#6B57C8</item>
+        <item name="android:navigationBarColor">#F7F4FF</item>
+        <item name="android:statusBarColor">#6B57C8</item>
+    </style>
+</resources>

@@ -37,6 +37,40 @@ class WeChatSettings:
     exact_match: bool = True
 
 @dataclass
+class OperitSettings:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8094"
+    bearer_token: str = ""
+    allowed_senders: List[str] = field(default_factory=list)
+    allowed_chats: List[str] = field(default_factory=list)
+    allow_group_commands: bool = False
+    command_prefixes: List[str] = field(
+        default_factory=lambda: ["手机：", "手机:", "/手机 ", "/phone "]
+    )
+    request_timeout_seconds: float = 180.0
+    show_floating: bool = True
+    require_confirmation: bool = True
+    confirmation_ttl_seconds: float = 120.0
+    session_file: str = "data/operit_sessions.json"
+
+@dataclass
+class NanaPhoneSettings:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8765"
+    pairing_token: str = ""
+    request_timeout_seconds: float = 20.0
+
+@dataclass
+class LLMRouteSettings:
+    name: str = ""
+    enabled: bool = False
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    complex_only: bool = False
+    max_tokens: int = 0
+
+@dataclass
 class LLMSettings:
     api_key: str
     base_url: str
@@ -46,6 +80,7 @@ class LLMSettings:
     model: str = "deepseek-chat"
     max_tokens: int = 2000
     temperature: float = 1.0
+    fallback_routes: List[LLMRouteSettings] = field(default_factory=list)
 
 @dataclass
 class ImageRecognitionSettings:
@@ -92,6 +127,8 @@ class Config:
     def __init__(self):
         self.user: UserSettings
         self.wechat: WeChatSettings
+        self.operit: OperitSettings
+        self.nana_phone: NanaPhoneSettings
         self.llm: LLMSettings
         self.media: MediaSettings
         self.behavior: BehaviorSettings
@@ -191,14 +228,105 @@ class Config:
                         default=True,
                     ),
                 )
+
+                # Operit phone-control bridge. It is disabled and deny-by-default
+                # so old configurations cannot accidentally expose a phone.
+                operit_data = categories.get('operit_settings', {}).get('settings', {})
+                self.operit = OperitSettings(
+                    enabled=_as_bool(
+                        operit_data.get('enabled', {}).get('value', False),
+                        default=False,
+                    ),
+                    base_url=str(
+                        operit_data.get('base_url', {}).get(
+                            'value', 'http://127.0.0.1:8094'
+                        )
+                    ).strip() or 'http://127.0.0.1:8094',
+                    bearer_token=str(
+                        operit_data.get('bearer_token', {}).get('value', '')
+                    ).strip(),
+                    allowed_senders=[
+                        str(item).strip()
+                        for item in operit_data.get('allowed_senders', {}).get('value', [])
+                        if str(item).strip()
+                    ],
+                    allowed_chats=[
+                        str(item).strip()
+                        for item in operit_data.get('allowed_chats', {}).get('value', [])
+                        if str(item).strip()
+                    ],
+                    allow_group_commands=_as_bool(
+                        operit_data.get('allow_group_commands', {}).get('value', False),
+                        default=False,
+                    ),
+                    command_prefixes=[
+                        str(item)
+                        for item in operit_data.get('command_prefixes', {}).get(
+                            'value', ["手机：", "手机:", "/手机 ", "/phone "]
+                        )
+                        if str(item).strip()
+                    ],
+                    request_timeout_seconds=float(
+                        operit_data.get('request_timeout_seconds', {}).get('value', 180.0)
+                    ),
+                    show_floating=_as_bool(
+                        operit_data.get('show_floating', {}).get('value', True),
+                        default=True,
+                    ),
+                    require_confirmation=_as_bool(
+                        operit_data.get('require_confirmation', {}).get('value', True),
+                        default=True,
+                    ),
+                    confirmation_ttl_seconds=float(
+                        operit_data.get('confirmation_ttl_seconds', {}).get('value', 120.0)
+                    ),
+                    session_file=str(
+                        operit_data.get('session_file', {}).get(
+                            'value', 'data/operit_sessions.json'
+                        )
+                    ).strip() or 'data/operit_sessions.json',
+                )
+
+                nana_phone_data = categories.get('nana_phone_settings', {}).get('settings', {})
+                self.nana_phone = NanaPhoneSettings(
+                    enabled=_as_bool(
+                        nana_phone_data.get('enabled', {}).get('value', False),
+                        default=False,
+                    ),
+                    base_url=str(
+                        nana_phone_data.get('base_url', {}).get(
+                            'value', 'http://127.0.0.1:8765'
+                        )
+                    ).strip() or 'http://127.0.0.1:8765',
+                    pairing_token=str(
+                        nana_phone_data.get('pairing_token', {}).get('value', '')
+                    ).strip(),
+                    request_timeout_seconds=float(
+                        nana_phone_data.get('request_timeout_seconds', {}).get('value', 20.0)
+                    ),
+                )
                 
                 # LLM设置
                 llm_data = categories['llm_settings']['settings']
                 provider = str(
                     llm_data.get('provider', {}).get('value', 'deepseek')
                 ).strip().lower()
-                if provider not in {"deepseek", "dify"}:
+                if provider not in {"deepseek", "openai_compatible", "dify"}:
                     provider = "deepseek"
+                fallback_routes = []
+                for index in range(1, 4):
+                    prefix = f"fallback_{index}_"
+                    route = LLMRouteSettings(
+                        name=str(llm_data.get(prefix + 'name', {}).get('value', f'备用线路 {index}')).strip(),
+                        enabled=_as_bool(llm_data.get(prefix + 'enabled', {}).get('value', False)),
+                        api_key=str(llm_data.get(prefix + 'api_key', {}).get('value', '')).strip(),
+                        base_url=str(llm_data.get(prefix + 'base_url', {}).get('value', '')).strip(),
+                        model=str(llm_data.get(prefix + 'model', {}).get('value', '')).strip(),
+                        complex_only=_as_bool(llm_data.get(prefix + 'complex_only', {}).get('value', False)),
+                        max_tokens=int(llm_data.get(prefix + 'max_tokens', {}).get('value', 0) or 0),
+                    )
+                    if route.enabled or route.api_key or route.base_url or route.model:
+                        fallback_routes.append(route)
                 self.llm = LLMSettings(
                     api_key=llm_data.get('api_key', {}).get('value', ''),
                     base_url=llm_data.get('base_url', {}).get('value', ''),
@@ -214,6 +342,7 @@ class Config:
                     temperature=float(
                         llm_data.get('temperature', {}).get('value', 1.0)
                     ),
+                    fallback_routes=fallback_routes,
                 )
                 
                 # 媒体设置

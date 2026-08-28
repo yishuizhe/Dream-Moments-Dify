@@ -6,6 +6,7 @@
 import os
 import random
 import logging
+import time
 from typing import Optional
 from config import config
 
@@ -18,11 +19,14 @@ class EmojiHandler:
         
         # 情感分类映射（情感目录名: 关键词列表）
         self.emotion_map = {
-            'happy': ['开心', '高兴', '哈哈', '笑', '嘻嘻', '可爱', '乐'],
+            'happy': ['开心', '高兴', '哈哈', '嘿嘿', '笑', '嘻嘻', '可爱', '好耶', '喜欢', '爱你', '呀', '啦', '嘛', '～'],
             'sad': ['难过', '伤心', '哭', '委屈', '泪', '呜呜', '悲'],
-            'angry': ['生气', '怒', '哼', '啊啊', '呵呵'],
+            'angry': ['生气', '怒', '哼', '啊啊', '呵呵', '讨厌', '气死', '才不要', '不理你'],
             'neutral': []  # 默认中性分类
         }
+        self.emotion_map['sad'].extend(['心疼', '抱抱', '可怜'])
+        self._last_sent_at: dict[str, float] = {}
+        self.cooldown_seconds = 75.0
         
         # 确保目录存在
         os.makedirs(self.emoji_dir, exist_ok=True)
@@ -41,11 +45,18 @@ class EmojiHandler:
                 return emotion
         return 'neutral'
 
-    def get_emotion_emoji(self, text: str) -> Optional[str]:
+    def get_emotion_emoji(self, text: str, chat_id: str = "") -> Optional[str]:
         """根据AI回复内容的情感获取对应表情包"""
         try:
             # 检测情感分类
             emotion = self.detect_emotion(text)
+            if emotion == 'neutral':
+                return None
+            key = str(chat_id or "").strip()
+            now = time.monotonic()
+            if key and now - self._last_sent_at.get(key, 0.0) < self.cooldown_seconds:
+                logger.info("表情包冷却中，本次跳过: %s", key)
+                return None
             target_dir = os.path.join(self.emoji_dir, emotion)
             
             # 回退机制处理
@@ -67,6 +78,8 @@ class EmojiHandler:
                 
             # 随机选择并返回路径
             selected = random.choice(emoji_files)
+            if key:
+                self._last_sent_at[key] = now
             logger.info(f"已选择 {emotion} 表情包: {selected}")
             return os.path.join(target_dir, selected)
         except Exception as e:
