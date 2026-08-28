@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import tempfile
 import unittest
 from dataclasses import dataclass
@@ -139,6 +140,21 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
         self.assertEqual(messages[0].chat_name, "新群名")
         self.assertEqual(messages[0].chat_id, "room@chatroom")
         self.assertEqual(messages[0].configured_name, "旧群名")
+
+    def test_old_token_state_keeps_contact_ids_but_rebuilds_snapshots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "wechat-state.json"
+            state_path.write_text(json.dumps({
+                "version": 4,
+                "chats": {"旧群名": ["old-content-token"]},
+                "contact_ids": {"旧群名": "room@chatroom"},
+            }), encoding="utf-8")
+            adapter = WxAuto4PollingAdapter(
+                ["旧群名"], state_path=state_path,
+                wechat_factory=lambda: RenamedGroupFakeWeChat(),
+            )
+            self.assertEqual(adapter._snapshots, {})
+            self.assertEqual(adapter._contact_ids["旧群名"], "room@chatroom")
 
     def test_session_polling_opens_only_changed_whitelisted_chat(self):
         friend = "friend"

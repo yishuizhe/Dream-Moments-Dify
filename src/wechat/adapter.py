@@ -64,7 +64,7 @@ class WxAuto4PollingAdapter:
     # Version 2 intentionally drops wxauto4's UI ``id`` from persisted tokens.
     # That id is recreated after switching chats and therefore is not suitable
     # for comparing snapshots across foreground polling rounds.
-    STATE_VERSION = 4
+    STATE_VERSION = 5
 
     def __init__(
         self,
@@ -751,10 +751,15 @@ class WxAuto4PollingAdapter:
             return
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if data.get("version") not in {2, 3, self.STATE_VERSION}:
+            saved_version = data.get("version")
+            if saved_version not in {2, 3, 4, self.STATE_VERSION}:
                 return
             chats = data.get("chats", {})
-            if isinstance(chats, dict):
+            # v4 and older used content-derived UI tokens. The replica backend
+            # uses stable DB ids, so carrying those snapshots forward makes the
+            # first real message look discontinuous and can drop it. Preserve
+            # contact bindings but deliberately rebuild message baselines once.
+            if saved_version == self.STATE_VERSION and isinstance(chats, dict):
                 self._snapshots = {
                     str(chat): [str(token) for token in tokens][-self.history_size :]
                     for chat, tokens in chats.items()

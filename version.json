@@ -1,5 +1,5 @@
 {
-    "version": "2.1.1",
+    "version": "2.1.2",
     "last_update": "2026-08-28",
-    "description": "Keep group monitoring, chat history, and member memory continuous when a WeChat group is renamed."
+    "description": "Fix first-message loss after the WeChat 4.1.12 migration and preserve renamed-group plugin statistics."
 }
