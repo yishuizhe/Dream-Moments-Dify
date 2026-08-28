@@ -189,8 +189,15 @@ class ReplicaWeChatClient:
     def _convert_message(self, row: dict[str, Any]) -> ReplicaMessage:
         content = str(row.get("content") or "")
         sender_id = row.get("sender_id")
-        is_self = sender_id == 2 or str(sender_id) == self.myinfo.get("username")
         is_group = self._current_username.endswith("@chatroom")
+        # In current WeChat 4.1.12 private-chat tables, direction ids are the
+        # reverse of the legacy replica assumption: 2 is the remote party and
+        # 1 is the local account. Group tables still use 2 for the local
+        # account and member-specific ids for incoming messages.
+        if is_group:
+            is_self = sender_id == 2 or str(sender_id) == self.myinfo.get("username")
+        else:
+            is_self = sender_id in {1, "1"} or str(sender_id) == self.myinfo.get("username")
 
         if is_self:
             sender = self.nickname or "我"
