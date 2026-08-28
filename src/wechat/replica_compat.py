@@ -190,12 +190,18 @@ class ReplicaWeChatClient:
         content = str(row.get("content") or "")
         sender_id = row.get("sender_id")
         is_group = self._current_username.endswith("@chatroom")
+        group_sender_prefix = _GROUP_SENDER_RE.match(content) if is_group else None
         # In current WeChat 4.1.12 private-chat tables, direction ids are the
         # reverse of the legacy replica assumption: 2 is the remote party and
         # 1 is the local account. Group tables still use 2 for the local
         # account and member-specific ids for incoming messages.
         if is_group:
-            is_self = sender_id == 2 or str(sender_id) == self.myinfo.get("username")
+            # Some 4.1.12 group rows still report sender_id=2 for an incoming
+            # member, but embed the real member wxid at the start of content.
+            # That explicit prefix is a stronger direction signal.
+            is_self = not group_sender_prefix and (
+                sender_id == 2 or str(sender_id) == self.myinfo.get("username")
+            )
         else:
             is_self = sender_id in {1, "1"} or str(sender_id) == self.myinfo.get("username")
 
@@ -204,10 +210,9 @@ class ReplicaWeChatClient:
             stable_sender = self.myinfo.get("username") or "self"
         elif is_group:
             sender_username = str(row.get("sender_username") or "")
-            prefix = _GROUP_SENDER_RE.match(content)
-            if prefix:
-                sender_username = sender_username or prefix.group(1)
-                content = content[prefix.end() :]
+            if group_sender_prefix:
+                sender_username = sender_username or group_sender_prefix.group(1)
+                content = content[group_sender_prefix.end() :]
             sender = self._display_name(sender_username) if sender_username else self._current_name
             stable_sender = sender_username or str(sender_id or sender)
         else:
