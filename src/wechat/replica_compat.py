@@ -9,6 +9,7 @@ project's polling adapter.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -18,6 +19,7 @@ from typing import Any
 
 
 _GROUP_SENDER_RE = re.compile(r"^(wxid_[0-9A-Za-z_]+):\s*\n")
+logger = logging.getLogger(__name__)
 
 
 def _safe_ocr_name_matches(ocr_name: str, target: str) -> bool:
@@ -187,10 +189,14 @@ class ReplicaWeChatClient:
         }
 
     def _wait_for_sent_text(
-        self, username: str, before: set[tuple[Any, Any]], text: str
+        self,
+        username: str,
+        before: set[tuple[Any, Any]],
+        text: str,
+        timeout: float = 6.0,
     ) -> bool:
         is_group = username.endswith("@chatroom")
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + max(0.5, float(timeout))
         while time.monotonic() < deadline:
             for row in self._db.get_messages(username, limit=10) or []:
                 token = (row.get("local_id"), row.get("sort_seq"))
@@ -209,10 +215,13 @@ class ReplicaWeChatClient:
         return False
 
     def _wait_for_sent_file(
-        self, username: str, before: set[tuple[Any, Any]]
+        self,
+        username: str,
+        before: set[tuple[Any, Any]],
+        timeout: float = 8.0,
     ) -> bool:
         is_group = username.endswith("@chatroom")
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + max(0.5, float(timeout))
         while time.monotonic() < deadline:
             for row in self._db.get_messages(username, limit=10) or []:
                 token = (row.get("local_id"), row.get("sort_seq"))
@@ -227,6 +236,49 @@ class ReplicaWeChatClient:
                     return True
             time.sleep(0.25)
         return False
+
+    def _start_text_delivery_audit(
+        self,
+        username: str,
+        before: set[tuple[Any, Any]],
+        text: str,
+        who: str,
+    ) -> None:
+        """Audit eventual DB visibility without blocking the reply pipeline.
+
+        WeChat commits UI sends asynchronously and the decrypted WAL snapshot
+        can remain stale until a later database write.  The Enter key action
+        must therefore not be reported as failed solely because this cache did
+        not refresh within a few seconds.
+        """
+
+        def audit() -> None:
+            try:
+                if self._wait_for_sent_text(username, before, text, timeout=30.0):
+                    logger.debug("微信文字发送后台核验成功: %s", who)
+                else:
+                    logger.warning("微信文字发送未取得数据库回执（不自动重发）: %s", who)
+            except Exception:
+                logger.warning("微信文字发送后台核验异常（不自动重发）: %s", who, exc_info=True)
+
+        threading.Thread(target=audit, daemon=True, name="wechat-send-audit").start()
+
+    def _start_file_delivery_audit(
+        self,
+        username: str,
+        before: set[tuple[Any, Any]],
+        who: str,
+    ) -> None:
+        def audit() -> None:
+            try:
+                if self._wait_for_sent_file(username, before, timeout=30.0):
+                    logger.debug("微信文件发送后台核验成功: %s", who)
+                else:
+                    logger.warning("微信文件发送未取得数据库回执（不自动重发）: %s", who)
+            except Exception:
+                logger.warning("微信文件发送后台核验异常（不自动重发）: %s", who, exc_info=True)
+
+        threading.Thread(target=audit, daemon=True, name="wechat-file-audit").start()
 
     def IsOnline(self) -> bool:  # noqa: N802
         return bool(self.myinfo.get("username"))
@@ -412,8 +464,7 @@ class ReplicaWeChatClient:
                 sender._input.key(VK_DELETE)
                 raise
             sender._input.key(VK_RETURN)
-            if not self._wait_for_sent_text(username, before, msg):
-                raise RuntimeError(f"微信文字发送失败: {who}")
+            self._start_text_delivery_audit(username, before, msg, who)
             return True
 
     def SendFiles(self, filepath: str, who: str, **_: Any) -> Any:  # noqa: N802
@@ -445,8 +496,7 @@ class ReplicaWeChatClient:
                 sender._input.key(VK_DELETE)
                 raise
             sender._input.key(VK_RETURN)
-            if not self._wait_for_sent_file(username, before):
-                raise RuntimeError(f"微信文件发送失败: {who}")
+            self._start_file_delivery_audit(username, before, who)
             return True
 
 

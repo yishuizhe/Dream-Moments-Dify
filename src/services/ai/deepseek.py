@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 class DeepSeekAI:
     def __init__(self, api_key: str, base_url: str, model: str,
                  max_token: int, temperature: float, max_groups: int,
-                 raise_errors: bool = False, provider_name: str = "openai-compatible"):
+                 raise_errors: bool = False, provider_name: str = "openai-compatible",
+                 request_timeout: float = 35.0):
         """
         强化版AI服务初始化
 
@@ -35,6 +36,8 @@ class DeepSeekAI:
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=max(5.0, float(request_timeout)),
+            max_retries=0,
             default_headers={
                 "Content-Type": "application/json",
                 "User-Agent": "MyDreamBot/1.0"
@@ -255,9 +258,14 @@ class DeepSeekAI:
         except Exception as e:
             if 'previous_context' in locals():
                 self.chat_contexts[user_id] = previous_context
-            logger.error("%s 服务调用失败: %s", self.provider_name, str(e), exc_info=True)
             if self.raise_errors:
+                # The failover router owns provider errors.  Keep this concise:
+                # a 429/timeout on one free route is expected and should not
+                # flood the operator console with a traceback when the next
+                # route can answer normally.
+                logger.warning("%s 服务调用失败，将切换线路: %s", self.provider_name, str(e))
                 raise
+            logger.error("%s 服务调用失败: %s", self.provider_name, str(e), exc_info=True)
             return random.choice([
                 "好像有些小状况，请再试一次吧～",
                 "信号好像不太稳定呢（皱眉）",
