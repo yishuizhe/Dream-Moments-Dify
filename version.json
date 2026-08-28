@@ -1,5 +1,5 @@
 {
-    "version": "2.1.3",
+    "version": "2.1.4",
     "last_update": "2026-08-28",
-    "description": "Fix WeChat 4.1.12 private-message direction detection and poll the database reliably when session previews lag."
+    "description": "Fix WeChat 4.1.12 group messages with embedded member ids being mistaken for the bot's own messages."
 }
