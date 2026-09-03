@@ -41,6 +41,15 @@ bot_process = None
 bot_start_time = None
 bot_logs = Queue(maxsize=1000)
 
+WINDOWS_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+WINDOWS_NEW_PROCESS_GROUP = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
+
+
+def _windows_background_flags(with_process_group=False):
+    if not sys.platform.startswith('win'):
+        return 0
+    return WINDOWS_NO_WINDOW | (WINDOWS_NEW_PROCESS_GROUP if with_process_group else 0)
+
 # 配置日志
 dictConfig({
     'version': 1,
@@ -1007,9 +1016,7 @@ def start_bot():
         
         # 创建新的进程组
         if sys.platform.startswith('win'):
-            CREATE_NEW_PROCESS_GROUP = 0x00000200
-            DETACHED_PROCESS = 0x00000008
-            creationflags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+            creationflags = _windows_background_flags(with_process_group=True)
         else:
             creationflags = 0
         
@@ -1113,8 +1120,11 @@ def stop_bot():
             
             # 确保所有子进程都被终止
             if sys.platform.startswith('win'):
-                subprocess.run(['taskkill', '/F', '/T', '/PID', str(bot_process.pid)], 
-                             capture_output=True)
+                subprocess.run(
+                    ['taskkill', '/F', '/T', '/PID', str(bot_process.pid)],
+                    capture_output=True,
+                    creationflags=_windows_background_flags(),
+                )
             else:
                 import signal
                 os.killpg(os.getpgid(bot_process.pid), signal.SIGTERM)
@@ -1285,9 +1295,7 @@ restart - 重启机器人
             
             # 创建新的进程组
             if sys.platform.startswith('win'):
-                CREATE_NEW_PROCESS_GROUP = 0x00000200
-                DETACHED_PROCESS = 0x00000008
-                creationflags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+                creationflags = _windows_background_flags(with_process_group=True)
             else:
                 creationflags = 0
             
@@ -1329,8 +1337,11 @@ restart - 重启机器人
                     
                     # 确保所有子进程都被终止
                     if sys.platform.startswith('win'):
-                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(bot_process.pid)], 
-                                     capture_output=True)
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(bot_process.pid)],
+                            capture_output=True,
+                            creationflags=_windows_background_flags(),
+                        )
                     else:
                         import signal
                         os.killpg(os.getpgid(bot_process.pid), signal.SIGTERM)
@@ -1366,8 +1377,11 @@ restart - 重启机器人
                         bot_process.wait()
                     
                     if sys.platform.startswith('win'):
-                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(bot_process.pid)], 
-                                     capture_output=True)
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(bot_process.pid)],
+                            capture_output=True,
+                            creationflags=_windows_background_flags(),
+                        )
                     else:
                         import signal
                         os.killpg(os.getpgid(bot_process.pid), signal.SIGTERM)
@@ -1389,9 +1403,7 @@ restart - 重启机器人
                 env['PYTHONIOENCODING'] = 'utf-8'
                 
                 if sys.platform.startswith('win'):
-                    CREATE_NEW_PROCESS_GROUP = 0x00000200
-                    DETACHED_PROCESS = 0x00000008
-                    creationflags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+                    creationflags = _windows_background_flags(with_process_group=True)
                 else:
                     creationflags = 0
                 
@@ -1458,7 +1470,8 @@ def check_dependencies():
                     [sys.executable, '-m', 'pip', 'list'],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    creationflags=_windows_background_flags(),
                 )
                 stdout, stderr = process.communicate()
                 # 解析pip list的输出，只获取包名
@@ -1629,7 +1642,12 @@ def main():
     
     # 设置系统编码为 UTF-8 (不清除控制台输出)
     if sys.platform.startswith('win'):
-        os.system("@chcp 65001 >nul")  # 使用 >nul 来隐藏输出而不清屏
+        subprocess.run(
+            ['cmd.exe', '/d', '/c', 'chcp', '65001'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=_windows_background_flags(),
+        )
     
     print("\n" + "="*50)
     print_status("配置管理系统启动中...", "info", "LAUNCH")
@@ -1724,7 +1742,8 @@ def install_dependencies():
             [sys.executable, '-m', 'pip', 'install', '-r', requirements_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            universal_newlines=True
+            universal_newlines=True,
+            creationflags=_windows_background_flags(),
         )
         stdout, stderr = process.communicate()
         output.append(stdout if stdout else stderr)
