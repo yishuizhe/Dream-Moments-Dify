@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,34 @@ class FakeHistory:
 
 
 class GroupIdentityTests(unittest.TestCase):
+    def test_complete_message_jobs_are_serialized(self):
+        handler = MessageHandler.__new__(MessageHandler)
+        handler._processing_lock = threading.Lock()
+        state_lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def fake_process(_queue_key):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with state_lock:
+                active -= 1
+
+        handler._process_messages_serial = fake_process
+        workers = [
+            threading.Thread(target=handler.process_messages, args=(f"q-{index}",))
+            for index in range(3)
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        self.assertEqual(max_active, 1)
+
     def test_group_batch_keeps_each_sender_label_and_latest_member_memory(self):
         handler = MessageHandler.__new__(MessageHandler)
         handler.queue_lock = threading.Lock()

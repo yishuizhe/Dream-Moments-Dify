@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import json
 import tempfile
+import time
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -333,6 +334,21 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
             messages = restarted.poll_once()
 
             self.assertEqual([message.content for message in messages], ["第二条"])
+
+    def test_stale_state_rebuilds_baseline_without_replaying_downtime_messages(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "wechat-state.json"
+            fake = FakeWeChat({"好友": [FakeMessage("好友", "停机前")]})
+            first = self.make_adapter(fake, state_path=state_path)
+            self.assertEqual(first.poll_once(), [])
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["saved_at"] = time.time() - 600
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            fake.chats["好友"].append(FakeMessage("好友", "停机期间"))
+
+            restarted = self.make_adapter(fake, state_path=state_path)
+            self.assertEqual(restarted.poll_once(), [])
 
     def test_discontinuous_window_rebaselines_instead_of_replaying_history(self):
         fake = FakeWeChat({"好友": [FakeMessage("好友", "第一批")]})

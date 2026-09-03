@@ -10,7 +10,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from wechat.replica_compat import ReplicaWeChatClient, _safe_ocr_name_matches
+from wechat.replica_compat import (
+    ReplicaWeChatClient,
+    _safe_ocr_name_matches,
+    _search_ocr_name_matches,
+)
 
 
 class ReplicaCompatibilityTests(unittest.TestCase):
@@ -155,6 +159,10 @@ class ReplicaCompatibilityTests(unittest.TestCase):
             _safe_ocr_name_matches("以开心摸鱼小分", "开心摸鱼小分队")
         )
         self.assertFalse(_safe_ocr_name_matches("小明", "开心摸鱼小分队"))
+
+    def test_search_ocr_accepts_one_wrong_character_but_not_another_chat(self):
+        self.assertTrue(_search_ocr_name_matches("开芯摸鱼小分队", "开心摸鱼小分队"))
+        self.assertFalse(_search_ocr_name_matches("小明", "开心摸鱼小分队"))
 
     def test_text_send_requires_target_and_starts_database_audit(self):
         client, _db = self.make_client()

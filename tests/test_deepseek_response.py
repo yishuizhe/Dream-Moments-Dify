@@ -89,6 +89,26 @@ class DeepSeekResponseValidationTests(unittest.TestCase):
         request = self.ai.client.chat.completions.create.call_args.kwargs
         self.assertNotIn("extra_body", request)
 
+    def test_deepseek_v4_flash_disables_thinking_for_fast_chat(self):
+        ai = DeepSeekAI(
+            api_key="test-key",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            max_token=64,
+            temperature=0.2,
+            max_groups=2,
+        )
+        response = Mock()
+        response.model_dump.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "收到"}}]
+        }
+        response.choices = [Mock(message=Mock(content="收到"))]
+        ai.client.chat.completions.create = Mock(return_value=response)
+
+        self.assertEqual(ai.get_response("在吗", "u", "system"), "收到")
+        request = ai.client.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["extra_body"], {"thinking": {"type": "disabled"}})
+
 
 if __name__ == "__main__":
     unittest.main()

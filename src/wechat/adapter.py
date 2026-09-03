@@ -65,6 +65,10 @@ class WxAuto4PollingAdapter:
     # That id is recreated after switching chats and therefore is not suitable
     # for comparing snapshots across foreground polling rounds.
     STATE_VERSION = 5
+    # A quick process restart should keep its place, but after a longer outage
+    # the persisted cursor would replay old @mentions as if they had just
+    # arrived. Rebuild the baseline instead of speaking into stale chats.
+    STATE_RESUME_MAX_AGE_SECONDS = 120.0
 
     def __init__(
         self,
@@ -770,7 +774,21 @@ class WxAuto4PollingAdapter:
             # uses stable DB ids, so carrying those snapshots forward makes the
             # first real message look discontinuous and can drop it. Preserve
             # contact bindings but deliberately rebuild message baselines once.
-            if saved_version == self.STATE_VERSION and isinstance(chats, dict):
+            saved_at = data.get("saved_at")
+            state_age = (
+                max(0.0, time.time() - float(saved_at))
+                if isinstance(saved_at, (int, float))
+                else None
+            )
+            can_resume = (
+                self.process_existing_on_start
+                or (state_age is not None and state_age <= self.STATE_RESUME_MAX_AGE_SECONDS)
+            )
+            if (
+                saved_version == self.STATE_VERSION
+                and isinstance(chats, dict)
+                and can_resume
+            ):
                 self._snapshots = {
                     str(chat): [str(token) for token in tokens][-self.history_size :]
                     for chat, tokens in chats.items()
@@ -795,6 +813,7 @@ class WxAuto4PollingAdapter:
                 temp_path = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
                 payload = {
                     "version": self.STATE_VERSION,
+                    "saved_at": time.time(),
                     "chats": self._snapshots,
                     "contact_ids": self._contact_ids,
                 }

@@ -34,6 +34,20 @@ class ReplyNaturalnessTests(unittest.TestCase):
         self.assertNotEqual(varied, answer)
         self.assertTrue("问过" in varied or "轮流" in varied)
 
+    def test_reply_cooldown_scope_separates_private_and_group_chat(self):
+        handler = self.make_handler()
+        handler._last_reply_at = {}
+        handler._last_reply_text = {}
+        handler.reply_cooldown_seconds = 8.0
+        handler.duplicate_window_seconds = 120.0
+        identity = "person:owner"
+
+        private_scope = handler._reply_scope_key("private-id", identity)
+        group_scope = handler._reply_scope_key("room@chatroom", identity)
+
+        self.assertFalse(handler._should_suppress_reply(private_scope, "在呢"))
+        self.assertFalse(handler._should_suppress_reply(group_scope, "在呢"))
+
     def test_repeat_tracking_is_scoped_to_one_chat(self):
         handler = self.make_handler()
         answer = "今天想喝绿茶。"

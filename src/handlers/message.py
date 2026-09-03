@@ -106,6 +106,10 @@ class MessageHandler:
         self.emoji_handler = emoji_handler
         self.voice_handler = voice_handler
         self._reply_lock = threading.Lock()
+        # AI generation and foreground WeChat sending share external resources.
+        # Process one debounced batch end-to-end so concurrent timer threads
+        # cannot race the active chat window or burst the provider rate limit.
+        self._processing_lock = threading.Lock()
         self._last_reply_at: dict[str, float] = {}
         self._last_reply_text: dict[str, tuple[float, str]] = {}
         self._recent_chat_replies: dict[str, deque[tuple[float, str]]] = {}
@@ -280,6 +284,12 @@ class MessageHandler:
             self._last_reply_text[key] = (now, normalized)
             return False
 
+    @staticmethod
+    def _reply_scope_key(chat_id: str, identity_key: str) -> str:
+        """Keep cooldown/duplicate suppression inside one conversation."""
+
+        return f"{str(chat_id or '').strip()}::{str(identity_key or '').strip()}"
+
     def _vary_repeated_reply(self, chat_id: str, reply: str, *, is_group: bool) -> str:
         """Replace a near-verbatim repeat with a chat-aware, natural response."""
         now = time.monotonic()
@@ -322,6 +332,18 @@ class MessageHandler:
         )
 
     def process_messages(self, queue_key: str):
+        """Serialize complete AI + send jobs created by debounce timers."""
+
+        lock = getattr(self, "_processing_lock", None)
+        if lock is None:
+            # Compatibility for lightweight test/third-party instances built
+            # without calling MessageHandler.__init__.
+            lock = threading.Lock()
+            self._processing_lock = lock
+        with lock:
+            return self._process_messages_serial(queue_key)
+
+    def _process_messages_serial(self, queue_key: str):
         """Process structured queued messages without losing group member identity."""
         with self.queue_lock:
             if queue_key not in self.user_queues:
@@ -566,7 +588,8 @@ class MessageHandler:
                     return
                 reply = self._vary_repeated_reply(chat_id, reply, is_group=is_group)
                 logger.info("AI reply generated for chat %s", chat_id)
-                if self._should_suppress_reply(identity_key, reply):
+                reply_scope = self._reply_scope_key(chat_id, identity_key)
+                if self._should_suppress_reply(reply_scope, reply):
                     logger.info("Suppressed cooldown/duplicate reply for %s", identity_key)
                     return
 

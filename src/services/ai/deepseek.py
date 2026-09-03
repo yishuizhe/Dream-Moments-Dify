@@ -52,6 +52,7 @@ class DeepSeekAI:
         self.raise_errors = bool(raise_errors)
         self.provider_name = str(provider_name or "openai-compatible")
         self.is_zhipu = "open.bigmodel.cn" in str(base_url).lower()
+        self.is_deepseek = "api.deepseek.com" in str(base_url).lower()
         self.chat_contexts: Dict[str, List[Dict]] = {}
 
         # 安全字符白名单（可根据需要扩展）
@@ -237,7 +238,7 @@ class DeepSeekAI:
                 # GLM-4.7-Flash 默认思考时可能在较小 max_tokens 内只返回
                 # reasoning_content 而没有可发送的正文。微信闲聊默认关闭思考，
                 # 同时降低延迟和免费线路压力。
-                if self.is_zhipu:
+                if self.is_zhipu or self.is_deepseek:
                     request_config["extra_body"] = {"thinking": {"type": "disabled"}}
                 
                 # 使用 OpenAI 客户端发送请求

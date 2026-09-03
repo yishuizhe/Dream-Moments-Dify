@@ -39,6 +39,18 @@ def _safe_ocr_name_matches(ocr_name: str, target: str) -> bool:
     return expected[:-1] in observed or expected[1:] in observed
 
 
+def _search_ocr_name_matches(ocr_name: str, target: str) -> bool:
+    """Allow one OCR substitution while selecting an already-filtered result."""
+
+    if _safe_ocr_name_matches(ocr_name, target):
+        return True
+    observed = re.sub(r"^[^\u4e00-\u9fffA-Za-z]+", "", str(ocr_name or ""))
+    expected = re.sub(r"\s+", "", str(target or ""))
+    if len(expected) < 4 or len(observed) != len(expected):
+        return False
+    return sum(left != right for left, right in zip(observed, expected)) <= 1
+
+
 @dataclass(slots=True)
 class ReplicaMessage:
     content: str
@@ -96,12 +108,48 @@ class ReplicaWeChatClient:
     @property
     def _sender(self) -> Any:
         if self._uia_sender is None:
-            from wechatauto.guia import WeChatGUI
+            from wechatauto.guia import (
+                SIDEBAR_LEFT,
+                VK_A,
+                VK_DELETE,
+                VK_V,
+                WeChatGUI,
+            )
 
             class SafeWeChatGUI(WeChatGUI):
                 """Use OCR only for target confirmation, never window cleanup."""
 
                 def calibrate_layout(self, save: bool = True) -> bool:
+                    # WeChat 4.1.12 uses a wider session pane than the upstream
+                    # 0.22 fallback. Detect its vertical divider from a screen
+                    # sample; the divider is the only strong edge that persists
+                    # through most rows, unlike avatars and message bubbles.
+                    try:
+                        from statistics import median
+
+                        self._update_render_rect()
+                        top = min(90, max(0, self.render_h // 8))
+                        bottom = max(top + 20, self.render_h - 120)
+                        image = self._grab_screen(
+                            self._rel_to_screen((0, top, self.render_w, bottom))
+                        ).convert("RGB")
+                        best_score = -1.0
+                        best_x = 0
+                        for x in range(int(self.render_w * 0.20), int(self.render_w * 0.38)):
+                            diffs = []
+                            for y in range(0, image.height, 5):
+                                left = image.getpixel((x, y))
+                                right = image.getpixel((x + 1, y))
+                                diffs.append(sum(abs(left[i] - right[i]) for i in range(3)))
+                            score = float(median(diffs)) if diffs else 0.0
+                            if score > best_score:
+                                best_score, best_x = score, x
+                        if best_score >= 10.0:
+                            self._sidebar_ratio = (best_x + 1) / self.render_w
+                            self._update_layout()
+                            return True
+                    except Exception:
+                        pass
                     return False
 
                 def _get_uia(self):
@@ -128,34 +176,73 @@ class ReplicaWeChatClient:
                     occasional hard-to-read title.
                     """
 
-                    try:
-                        self._update_render_rect()
-                        results = self.ocr_zoomed(
-                            (self.right_pane_left, 0, self.render_w, 185),
-                            scale=3,
-                        )
-                        title = "".join(text.strip() for text, *_ in results)
-                        normalized_name = re.sub(r"\s+", "", str(name or ""))
-                        normalized_title = re.sub(r"\s+", "", title)
-                        if not normalized_name or not normalized_title:
-                            return False
-                        if normalized_name in normalized_title:
-                            return True
-                        if len(normalized_name) >= 4:
-                            fragments = (
-                                normalized_name[1:4],
-                                normalized_name[2:5],
-                                normalized_name[-3:],
-                            )
-                        elif len(normalized_name) >= 2:
-                            fragments = (normalized_name, normalized_name[-2:])
-                        else:
-                            fragments = (normalized_name,)
-                        return any(fragment in normalized_title for fragment in fragments)
-                    except Exception:
+                    normalized_name = re.sub(r"\s+", "", str(name or ""))
+                    if not normalized_name:
                         return False
+                    for attempt, scale in enumerate((2, 3, 2)):
+                        try:
+                            self._update_render_rect()
+                            results = self.ocr_zoomed(
+                                (self.right_pane_left, 0, self.render_w, 110),
+                                scale=scale,
+                            )
+                            title = "".join(text.strip() for text, *_ in results)
+                            if _safe_ocr_name_matches(title, normalized_name):
+                                return True
+                        except Exception:
+                            pass
+                        if attempt < 2:
+                            time.sleep(0.15)
+                    return False
+
+                def _search_chat(self, name: str) -> bool:
+                    """Search and click the exact group/contact result safely."""
+
+                    crop_top = int(self.render_h * 0.08)
+                    for _ in range(3):
+                        sb = self._rel_to_screen(self.search_box)
+                        self._input.real_click(
+                            (sb[0] + sb[2]) // 2, (sb[1] + sb[3]) // 2
+                        )
+                        time.sleep(0.3)
+                        self._input.key(VK_A, ctrl=True)
+                        self._input.key(VK_DELETE)
+                        self.set_clipboard(name)
+                        self._input.key(VK_V, ctrl=True)
+                        time.sleep(0.8)
+                        results = self.ocr_zoomed(
+                            (SIDEBAR_LEFT, crop_top, self.sidebar_right, self.render_h),
+                            scale=2,
+                        )
+                        candidates = [
+                            row for row in results
+                            if row[2] < self.render_h * 0.35
+                            and _search_ocr_name_matches(row[0], name)
+                        ]
+                        if candidates:
+                            _text, x, y, width, height = max(
+                                candidates, key=lambda row: (row[2], row[1])
+                            )
+                            self._input.real_click(
+                                self.origin_x + x + width // 2,
+                                self.origin_y + y + height // 2,
+                            )
+                            time.sleep(0.8)
+                            return True
+                    return False
+
+                def open_chat(self, name: str, exact: bool = False) -> bool:
+                    if not self.ensure_visible():
+                        return False
+                    self._update_render_rect()
+                    if self._chat_is_open(name):
+                        return True
+                    if self._search_chat(name):
+                        return self._chat_is_open(name)
+                    return False
 
             self._uia_sender = SafeWeChatGUI()
+            self._uia_sender.calibrate_layout(save=False)
         return self._uia_sender
 
     def _open_send_target(self, who: str) -> Any:
