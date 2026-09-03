@@ -183,7 +183,10 @@ class ReplicaWeChatClient:
                         try:
                             self._update_render_rect()
                             results = self.ocr_zoomed(
-                                (self.right_pane_left, 0, self.render_w, 110),
+                                # Read the title line only. Group announcements
+                                # begin below this crop and may contain a contact
+                                # name, which must never confirm a send target.
+                                (self.right_pane_left, 20, self.render_w, 75),
                                 scale=scale,
                             )
                             title = "".join(text.strip() for text, *_ in results)
@@ -217,6 +220,8 @@ class ReplicaWeChatClient:
                         candidates = [
                             row for row in results
                             if row[2] < self.render_h * 0.35
+                            and row[1] >= self.sidebar_right * 0.30
+                            and "包含" not in str(row[0] or "")
                             and _search_ocr_name_matches(row[0], name)
                         ]
                         if candidates:
@@ -228,7 +233,8 @@ class ReplicaWeChatClient:
                                 self.origin_y + y + height // 2,
                             )
                             time.sleep(0.8)
-                            return True
+                            if self._chat_is_open(name):
+                                return True
                     return False
 
                 def open_chat(self, name: str, exact: bool = False) -> bool:
@@ -268,104 +274,6 @@ class ReplicaWeChatClient:
             sender.render_w,
             sender.render_h - int(sender.render_h * 0.082),
         )
-
-    def _message_ids(self, username: str) -> set[tuple[Any, Any]]:
-        return {
-            (row.get("local_id"), row.get("sort_seq"))
-            for row in (self._db.get_messages(username, limit=10) or [])
-        }
-
-    def _wait_for_sent_text(
-        self,
-        username: str,
-        before: set[tuple[Any, Any]],
-        text: str,
-        timeout: float = 6.0,
-    ) -> bool:
-        is_group = username.endswith("@chatroom")
-        deadline = time.monotonic() + max(0.5, float(timeout))
-        while time.monotonic() < deadline:
-            for row in self._db.get_messages(username, limit=10) or []:
-                token = (row.get("local_id"), row.get("sort_seq"))
-                if token in before or str(row.get("content") or "") != text:
-                    continue
-                sender_id = row.get("sender_id")
-                content = str(row.get("content") or "")
-                is_outgoing = (
-                    sender_id in {1, "1"} and not _GROUP_SENDER_RE.match(content)
-                    if is_group
-                    else sender_id in {1, "1"}
-                )
-                if is_outgoing:
-                    return True
-            time.sleep(0.25)
-        return False
-
-    def _wait_for_sent_file(
-        self,
-        username: str,
-        before: set[tuple[Any, Any]],
-        timeout: float = 8.0,
-    ) -> bool:
-        is_group = username.endswith("@chatroom")
-        deadline = time.monotonic() + max(0.5, float(timeout))
-        while time.monotonic() < deadline:
-            for row in self._db.get_messages(username, limit=10) or []:
-                token = (row.get("local_id"), row.get("sort_seq"))
-                if token in before:
-                    continue
-                sender_id = row.get("sender_id")
-                content = str(row.get("content") or "")
-                if is_group:
-                    if sender_id in {1, "1"} and not _GROUP_SENDER_RE.match(content):
-                        return True
-                elif sender_id in {1, "1"}:
-                    return True
-            time.sleep(0.25)
-        return False
-
-    def _start_text_delivery_audit(
-        self,
-        username: str,
-        before: set[tuple[Any, Any]],
-        text: str,
-        who: str,
-    ) -> None:
-        """Audit eventual DB visibility without blocking the reply pipeline.
-
-        WeChat commits UI sends asynchronously and the decrypted WAL snapshot
-        can remain stale until a later database write.  The Enter key action
-        must therefore not be reported as failed solely because this cache did
-        not refresh within a few seconds.
-        """
-
-        def audit() -> None:
-            try:
-                if self._wait_for_sent_text(username, before, text, timeout=30.0):
-                    logger.debug("微信文字发送后台核验成功: %s", who)
-                else:
-                    logger.warning("微信文字发送未取得数据库回执（不自动重发）: %s", who)
-            except Exception:
-                logger.warning("微信文字发送后台核验异常（不自动重发）: %s", who, exc_info=True)
-
-        threading.Thread(target=audit, daemon=True, name="wechat-send-audit").start()
-
-    def _start_file_delivery_audit(
-        self,
-        username: str,
-        before: set[tuple[Any, Any]],
-        who: str,
-    ) -> None:
-        def audit() -> None:
-            try:
-                if self._wait_for_sent_file(username, before, timeout=30.0):
-                    logger.debug("微信文件发送后台核验成功: %s", who)
-                else:
-                    logger.warning("微信文件发送未取得数据库回执（不自动重发）: %s", who)
-            except Exception:
-                logger.warning("微信文件发送后台核验异常（不自动重发）: %s", who, exc_info=True)
-
-        threading.Thread(target=audit, daemon=True, name="wechat-file-audit").start()
 
     def IsOnline(self) -> bool:  # noqa: N802
         return bool(self.myinfo.get("username"))
@@ -530,7 +438,6 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
-            before = self._message_ids(username)
             sender = self._open_send_target(who)
             box = self._safe_input_box(sender)
             if not sender.focus_input(box):
@@ -551,7 +458,6 @@ class ReplicaWeChatClient:
                 sender._input.key(VK_DELETE)
                 raise
             sender._input.key(VK_RETURN)
-            self._start_text_delivery_audit(username, before, msg, who)
             return True
 
     def SendFiles(self, filepath: str, who: str, **_: Any) -> Any:  # noqa: N802
@@ -560,7 +466,6 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
-            before = self._message_ids(username)
             sender = self._open_send_target(who)
             box = self._safe_input_box(sender)
             if not sender.focus_input(box):
@@ -583,7 +488,6 @@ class ReplicaWeChatClient:
                 sender._input.key(VK_DELETE)
                 raise
             sender._input.key(VK_RETURN)
-            self._start_file_delivery_audit(username, before, who)
             return True
 
 
