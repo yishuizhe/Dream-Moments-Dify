@@ -12,8 +12,10 @@ if str(SRC) not in sys.path:
 
 from wechat.replica_compat import (
     ReplicaWeChatClient,
+    _ocr_name_similarity,
     _safe_ocr_name_matches,
     _search_ocr_name_matches,
+    _title_ocr_name_matches,
 )
 
 
@@ -163,6 +165,15 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_search_ocr_accepts_one_wrong_character_but_not_another_chat(self):
         self.assertTrue(_search_ocr_name_matches("开芯摸鱼小分队", "开心摸鱼小分队"))
         self.assertFalse(_search_ocr_name_matches("小明", "开心摸鱼小分队"))
+
+    def test_best_search_match_tolerates_multiple_long_name_ocr_errors(self):
+        target = "开心摸鱼小分队"
+        self.assertGreater(_ocr_name_similarity("开芯摸鱼小分対", target), 0.55)
+        self.assertLess(_ocr_name_similarity("完全不同的群聊", target), 0.55)
+
+    def test_title_match_tolerates_one_glyph_but_rejects_another_chat(self):
+        self.assertTrue(_title_ocr_name_matches("开芯摸鱼小分队（8）", "开心摸鱼小分队"))
+        self.assertFalse(_title_ocr_name_matches("完全不同的群聊", "开心摸鱼小分队"))
 
     def test_text_send_requires_target_and_starts_database_audit(self):
         client, _db = self.make_client()

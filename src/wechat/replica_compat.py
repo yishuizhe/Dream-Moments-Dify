@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,23 @@ def _search_ocr_name_matches(ocr_name: str, target: str) -> bool:
     if len(expected) < 4 or len(observed) != len(expected):
         return False
     return sum(left != right for left, right in zip(observed, expected)) <= 1
+
+
+def _ocr_name_similarity(ocr_name: str, target: str) -> float:
+    observed = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(ocr_name or ""))
+    expected = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(target or ""))
+    if not observed or not expected:
+        return 0.0
+    if expected in observed or observed in expected:
+        return 1.0
+    return SequenceMatcher(None, observed, expected).ratio()
+
+
+def _title_ocr_name_matches(ocr_name: str, target: str) -> bool:
+    if _safe_ocr_name_matches(ocr_name, target):
+        return True
+    expected = re.sub(r"\s+", "", str(target or ""))
+    return len(expected) >= 4 and _ocr_name_similarity(ocr_name, target) >= 0.72
 
 
 @dataclass(slots=True)
@@ -190,7 +208,7 @@ class ReplicaWeChatClient:
                                 scale=scale,
                             )
                             title = "".join(text.strip() for text, *_ in results)
-                            if _safe_ocr_name_matches(title, normalized_name):
+                            if _title_ocr_name_matches(title, normalized_name):
                                 return True
                         except Exception:
                             pass
@@ -217,16 +235,20 @@ class ReplicaWeChatClient:
                             (SIDEBAR_LEFT, crop_top, self.sidebar_right, self.render_h),
                             scale=2,
                         )
-                        candidates = [
-                            row for row in results
-                            if row[2] < self.render_h * 0.35
-                            and row[1] >= self.sidebar_right * 0.30
-                            and "包含" not in str(row[0] or "")
-                            and _search_ocr_name_matches(row[0], name)
-                        ]
+                        candidates = []
+                        for row in results:
+                            if (
+                                row[2] >= self.render_h * 0.35
+                                or row[1] < self.sidebar_right * 0.30
+                                or "包含" in str(row[0] or "")
+                            ):
+                                continue
+                            score = _ocr_name_similarity(row[0], name)
+                            if score >= 0.55:
+                                candidates.append((score, row))
                         if candidates:
-                            _text, x, y, width, height = max(
-                                candidates, key=lambda row: (row[2], row[1])
+                            _score, (_text, x, y, width, height) = max(
+                                candidates, key=lambda item: (item[0], -item[1][2])
                             )
                             self._input.real_click(
                                 self.origin_x + x + width // 2,
