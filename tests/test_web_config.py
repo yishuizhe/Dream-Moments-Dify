@@ -42,6 +42,19 @@ class WebConfigTests(unittest.TestCase):
             with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
                 run_config_web.get_avatar_file(unsafe)
 
+    def test_avatar_read_error_does_not_expose_internal_exception(self):
+        client = run_config_web.app.test_client()
+        with patch(
+            "run_config_web._read_avatar",
+            side_effect=OSError("/private/server/path/avatar.md: permission denied"),
+        ):
+            response = client.get("/console_avatar?avatar=MONO")
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertEqual(payload["message"], "无法读取指定人设")
+        self.assertNotIn("/private/server/path", response.get_data(as_text=True))
+
     def test_polling_settings_are_exposed_and_saved(self):
         groups = run_config_web.parse_config_groups()
         self.assertIn("微信轮询配置", groups)

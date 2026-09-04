@@ -9,10 +9,13 @@
 
 import os
 import base64
+import ipaddress
 import logging
 import requests
+import socket
 from datetime import datetime
 from typing import Optional, List, Tuple
+from urllib.parse import urljoin, urlsplit
 import re
 import time
 from services.ai.deepseek import DeepSeekAI
@@ -20,6 +23,9 @@ from services.ai.deepseek import DeepSeekAI
 logger = logging.getLogger(__name__)
 
 class ImageHandler:
+    MAX_IMAGE_BYTES = 20 * 1024 * 1024
+    MAX_IMAGE_REDIRECTS = 3
+
     def __init__(
         self,
         root_dir,
@@ -325,6 +331,81 @@ class ImageHandler:
             return self.quality_profiles['standard']
         return self.quality_profiles['fast']
 
+    @staticmethod
+    def _validate_public_https_url(url: str, *, field_name: str) -> str:
+        """Reject credentials, non-HTTPS schemes, and non-public destinations."""
+        candidate = str(url or "").strip()
+        try:
+            parsed = urlsplit(candidate)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"{field_name} 格式无效") from exc
+
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            raise ValueError(f"{field_name} 必须是完整的 HTTPS 地址")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(f"{field_name} 不能包含 URL 凭据")
+
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname == "localhost" or hostname.endswith(".localhost"):
+            raise ValueError(f"{field_name} 不能指向本机或私有网络")
+
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+            addresses = [literal_ip]
+        except ValueError:
+            try:
+                resolved = socket.getaddrinfo(
+                    hostname,
+                    port or 443,
+                    type=socket.SOCK_STREAM,
+                )
+            except socket.gaierror as exc:
+                raise ValueError(f"{field_name} 域名无法解析") from exc
+            addresses = []
+            for item in resolved:
+                try:
+                    addresses.append(ipaddress.ip_address(item[4][0]))
+                except ValueError as exc:
+                    raise ValueError(f"{field_name} 解析结果无效") from exc
+
+        if not addresses or any(not address.is_global for address in addresses):
+            raise ValueError(f"{field_name} 不能指向本机或私有网络")
+        return candidate
+
+    def _download_public_image(self, url: str) -> Tuple[bytes, str]:
+        """Download an image while validating every redirect destination."""
+        current_url = str(url or "").strip()
+        for redirect_count in range(self.MAX_IMAGE_REDIRECTS + 1):
+            safe_url = self._validate_public_https_url(
+                current_url,
+                field_name="图片下载地址",
+            )
+            response = requests.get(
+                safe_url,
+                timeout=60,
+                allow_redirects=False,
+            )
+            if response.status_code in {301, 302, 303, 307, 308}:
+                if redirect_count >= self.MAX_IMAGE_REDIRECTS:
+                    raise ValueError("图片下载重定向次数过多")
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError("图片下载重定向缺少目标地址")
+                current_url = urljoin(safe_url, location)
+                continue
+
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").lower()
+            if not content_type.startswith("image/"):
+                raise ValueError("图片下载返回了非图片内容")
+            content = response.content
+            if len(content) > self.MAX_IMAGE_BYTES:
+                raise ValueError("图片文件超过允许的大小")
+            return content, content_type
+
+        raise ValueError("图片下载失败")
+
     def _validate_image_provider(self) -> bool:
         """Validate independent image provider settings before any network call."""
         self.last_error = ""
@@ -334,8 +415,21 @@ class ImageHandler:
         if not self.image_api_key or not self.image_base_url or not self.image_model:
             self.last_error = "画图功能配置不完整，请填写图像 API Key、Base URL 和模型名称。"
             return False
-        if "api.deepseek.com" in self.image_base_url.lower():
+        try:
+            parsed = urlsplit(self.image_base_url)
+            hostname = (parsed.hostname or "").rstrip(".").lower()
+        except ValueError:
+            hostname = ""
+        if hostname == "api.deepseek.com" or hostname.endswith(".deepseek.com"):
             self.last_error = "DeepSeek 文本 API 不提供图片生成接口，请配置独立图像生成服务。"
+            return False
+        try:
+            self._validate_public_https_url(
+                self.image_base_url,
+                field_name="图像 API Base URL",
+            )
+        except ValueError as exc:
+            self.last_error = str(exc)
             return False
         return True
 
@@ -386,12 +480,21 @@ class ImageHandler:
                 "seed": int(time.time() % 100000),
                 "response_format": "url",
             }
-            response = requests.post(
+            endpoint = self._validate_public_https_url(
                 f"{self.image_base_url}/images/generations",
+                field_name="图像 API 地址",
+            )
+            response = requests.post(
+                endpoint,
                 headers=headers,
                 json=payload,
                 timeout=60,
+                allow_redirects=False,
             )
+            if response.status_code in {301, 302, 303, 307, 308}:
+                self.last_error = "图像生成服务不能返回重定向。"
+                logger.error("图像生成 API 拒绝重定向: HTTP %s", response.status_code)
+                return None
             try:
                 response.raise_for_status()
             except requests.HTTPError:
@@ -409,15 +512,16 @@ class ImageHandler:
 
             first = data[0] or {}
             if first.get("b64_json"):
-                return self._save_image_bytes(base64.b64decode(first["b64_json"]))
+                image_bytes = base64.b64decode(first["b64_json"], validate=True)
+                if len(image_bytes) > self.MAX_IMAGE_BYTES:
+                    raise ValueError("图片文件超过允许的大小")
+                return self._save_image_bytes(image_bytes)
 
             image_url = first.get("url")
             if image_url:
-                image_response = requests.get(image_url, timeout=60)
-                image_response.raise_for_status()
-                content_type = image_response.headers.get("Content-Type", "").lower()
+                image_bytes, content_type = self._download_public_image(image_url)
                 suffix = ".jpg" if "jpeg" in content_type else ".png"
-                return self._save_image_bytes(image_response.content, suffix=suffix)
+                return self._save_image_bytes(image_bytes, suffix=suffix)
 
             self.last_error = "图像生成服务返回结果中既没有 URL，也没有 base64 图片。"
             logger.error(self.last_error)

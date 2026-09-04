@@ -875,7 +875,8 @@ def console_avatar():
         try:
             return jsonify({'status': 'success', **_read_avatar(name)})
         except (OSError, ValueError) as exc:
-            return jsonify({'status': 'error', 'message': str(exc)}), 400
+            logger.warning("读取人设失败: %s", exc)
+            return jsonify({'status': 'error', 'message': '无法读取指定人设'}), 400
     payload = request.get_json(silent=True) or {}
     name = payload.pop('avatar', 'MONO')
     try:
