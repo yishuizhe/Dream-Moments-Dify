@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import json
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -316,6 +317,18 @@ class WxAuto4PollingAdapterTests(unittest.TestCase):
                 raise RuntimeError("Error calling OpenClipboard")
 
         adapter = self.make_adapter(ClipboardBrokenWeChat({"好友": []}))
+
+        with self.assertRaisesRegex(RuntimeError, "重新连接微信"):
+            adapter.poll_once()
+
+        self.assertIsNone(adapter._client)
+
+    def test_malformed_replica_snapshot_discards_the_stale_client(self):
+        class MalformedDatabaseWeChat(FakeWeChat):
+            def ChatWith(self, who, exact=True):
+                raise sqlite3.DatabaseError("database disk image is malformed")
+
+        adapter = self.make_adapter(MalformedDatabaseWeChat({"好友": []}))
 
         with self.assertRaisesRegex(RuntimeError, "重新连接微信"):
             adapter.poll_once()

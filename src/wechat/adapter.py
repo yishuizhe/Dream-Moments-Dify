@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -464,7 +465,9 @@ class WxAuto4PollingAdapter:
 
     @staticmethod
     def _requires_client_reconnect(exc: Exception) -> bool:
-        """Identify transient wxauto UI/clipboard failures that poison the client."""
+        """Identify transient UI/database failures that require a fresh client."""
+        if isinstance(exc, sqlite3.DatabaseError):
+            return True
         error_type = type(exc).__name__.lower()
         detail = str(exc).lower()
         markers = (
@@ -474,6 +477,8 @@ class WxAuto4PollingAdapter:
             "openclipboard",
             "elementnotavailable",
             "事件无法调用任何订户",
+            "database disk image is malformed",
+            "database schema has changed",
         )
         return any(marker in error_type or marker in detail for marker in markers)
 

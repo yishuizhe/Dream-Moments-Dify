@@ -14,6 +14,7 @@ from wechat.replica_compat import (
     ReplicaWeChatClient,
     _ocr_name_similarity,
     _safe_ocr_name_matches,
+    _select_search_result,
     _search_ocr_name_matches,
     _title_ocr_name_matches,
 )
@@ -175,6 +176,59 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         self.assertTrue(_title_ocr_name_matches("开芯摸鱼小分队（8）", "开心摸鱼小分队"))
         self.assertFalse(_title_ocr_name_matches("完全不同的群聊", "开心摸鱼小分队"))
 
+    def test_same_name_search_selects_group_from_member_preview(self):
+        rows = [
+            ("@问渠安全实验", 177, 119, 23, 11),
+            ("企业：问渠安全实室", 128, 142, 12, 11),
+            ("囤0问渠安金实验室", 97, 227, 9, 8),
+            ("包含：裴怡淼〔企业：问渠安全", 128, 302, 12, 11),
+            ("搜索网络结果", 85, 340, 14, 10),
+        ]
+
+        selected = _select_search_result(
+            rows,
+            "问渠安全实验室",
+            sidebar_right=261,
+            render_h=815,
+            expected_group=True,
+        )
+        self.assertEqual(selected, rows[2])
+
+    def test_same_name_search_selects_non_group_contact(self):
+        rows = [
+            ("@问渠安全实验", 177, 119, 23, 11),
+            ("企业：问渠安全实室", 128, 142, 12, 11),
+            ("囤0问渠安金实验室", 97, 227, 9, 8),
+            ("包含：成员", 128, 302, 12, 11),
+        ]
+
+        selected = _select_search_result(
+            rows,
+            "问渠安全实验室",
+            sidebar_right=261,
+            render_h=815,
+            expected_group=False,
+        )
+        self.assertEqual(selected, rows[0])
+
+    def test_multiple_same_name_groups_are_rejected(self):
+        rows = [
+            ("同名群聊", 100, 100, 40, 12),
+            ("包含：甲", 120, 125, 40, 12),
+            ("同名群聊", 100, 180, 40, 12),
+            ("包含：乙", 120, 205, 40, 12),
+        ]
+
+        self.assertIsNone(
+            _select_search_result(
+                rows,
+                "同名群聊",
+                sidebar_right=261,
+                render_h=815,
+                expected_group=True,
+            )
+        )
+
     def test_text_send_requires_target_and_starts_database_audit(self):
         client, _db = self.make_client()
         sender = MagicMock()
@@ -189,7 +243,9 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
         self.assertTrue(client.SendMsg("你好", "测试群"))
 
-        sender.open_chat.assert_called_once_with("测试群", exact=True)
+        sender.open_chat.assert_called_once_with(
+            "测试群", exact=True, expected_group=True
+        )
         self.assertEqual(sender._chat_is_open.call_count, 3)
 
     def test_text_send_aborts_if_target_changes_before_enter(self):

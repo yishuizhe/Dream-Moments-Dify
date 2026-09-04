@@ -63,10 +63,79 @@ def _ocr_name_similarity(ocr_name: str, target: str) -> float:
 
 
 def _title_ocr_name_matches(ocr_name: str, target: str) -> bool:
+    """Match only title-line OCR, tolerating a single difficult CJK glyph."""
+
     if _safe_ocr_name_matches(ocr_name, target):
         return True
     expected = re.sub(r"\s+", "", str(target or ""))
     return len(expected) >= 4 and _ocr_name_similarity(ocr_name, target) >= 0.72
+
+
+def _select_search_result(
+    rows: list[tuple[Any, ...]],
+    target: str,
+    *,
+    sidebar_right: int,
+    render_h: int,
+    expected_group: bool | None,
+) -> tuple[Any, ...] | None:
+    """Select a search result only when its chat type is unambiguous.
+
+    WeChat may return an enterprise contact and a group with the same display
+    name. Group rows have a nearby ``包含：<member>`` preview, while enterprise
+    contacts have an ``企业：`` subtitle. A stable ``@chatroom`` id tells the
+    caller which kind is intended. If OCR cannot distinguish the candidates,
+    refusing to send is safer than picking the first result.
+    """
+
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if len(row) < 5:
+            continue
+        text, x, y, _width, _height = row[:5]
+        if (
+            y >= render_h * 0.35
+            or x < sidebar_right * 0.30
+            or "包含" in str(text or "")
+            or "企业" in str(text or "")
+        ):
+            continue
+        score = _ocr_name_similarity(str(text or ""), target)
+        if score >= 0.55:
+            candidates.append({"score": score, "row": row, "group": False, "enterprise": False})
+
+    candidates.sort(key=lambda item: item["row"][2])
+    for index, candidate in enumerate(candidates):
+        y = candidate["row"][2]
+        next_y = (
+            candidates[index + 1]["row"][2]
+            if index + 1 < len(candidates)
+            else y + 100
+        )
+        context_bottom = min(y + 100, next_y - 1)
+        context = [
+            str(row[0] or "")
+            for row in rows
+            if len(row) >= 3 and y < row[2] <= context_bottom
+        ]
+        candidate["group"] = any("包含" in text for text in context)
+        candidate["enterprise"] = any("企业" in text for text in context)
+
+    if expected_group is True:
+        typed = [candidate for candidate in candidates if candidate["group"]]
+        if len(typed) == 1:
+            return typed[0]["row"]
+        if typed:
+            return None
+        if len(candidates) == 1 and not candidates[0]["enterprise"]:
+            return candidates[0]["row"]
+        return None
+
+    if expected_group is False:
+        typed = [candidate for candidate in candidates if not candidate["group"]]
+        return typed[0]["row"] if len(typed) == 1 else None
+
+    return candidates[0]["row"] if len(candidates) == 1 else None
 
 
 @dataclass(slots=True)
@@ -216,10 +285,11 @@ class ReplicaWeChatClient:
                             time.sleep(0.15)
                     return False
 
-                def _search_chat(self, name: str) -> bool:
+                def _search_chat(self, name: str, expected_group: bool | None = None) -> bool:
                     """Search and click the exact group/contact result safely."""
 
                     crop_top = int(self.render_h * 0.08)
+                    ambiguous = False
                     for _ in range(3):
                         sb = self._rel_to_screen(self.search_box)
                         self._input.real_click(
@@ -235,21 +305,15 @@ class ReplicaWeChatClient:
                             (SIDEBAR_LEFT, crop_top, self.sidebar_right, self.render_h),
                             scale=2,
                         )
-                        candidates = []
-                        for row in results:
-                            if (
-                                row[2] >= self.render_h * 0.35
-                                or row[1] < self.sidebar_right * 0.30
-                                or "包含" in str(row[0] or "")
-                            ):
-                                continue
-                            score = _ocr_name_similarity(row[0], name)
-                            if score >= 0.55:
-                                candidates.append((score, row))
-                        if candidates:
-                            _score, (_text, x, y, width, height) = max(
-                                candidates, key=lambda item: (item[0], -item[1][2])
-                            )
+                        selected = _select_search_result(
+                            results,
+                            name,
+                            sidebar_right=self.sidebar_right,
+                            render_h=self.render_h,
+                            expected_group=expected_group,
+                        )
+                        if selected:
+                            _text, x, y, width, height = selected
                             self._input.real_click(
                                 self.origin_x + x + width // 2,
                                 self.origin_y + y + height // 2,
@@ -257,15 +321,32 @@ class ReplicaWeChatClient:
                             time.sleep(0.8)
                             if self._chat_is_open(name):
                                 return True
+                            time.sleep(0.6)
+                            if self._chat_is_open(name):
+                                return True
+                        else:
+                            ambiguous = True
+                            time.sleep(0.35)
+                    if ambiguous:
+                        logger.error(
+                            "微信搜索结果存在同名或类型不明的目标，已拒绝发送: %s (%s)",
+                            name,
+                            "群聊" if expected_group else "联系人",
+                        )
                     return False
 
-                def open_chat(self, name: str, exact: bool = False) -> bool:
+                def open_chat(
+                    self,
+                    name: str,
+                    exact: bool = False,
+                    expected_group: bool | None = None,
+                ) -> bool:
                     if not self.ensure_visible():
                         return False
                     self._update_render_rect()
-                    if self._chat_is_open(name):
+                    if expected_group is None and self._chat_is_open(name):
                         return True
-                    if self._search_chat(name):
+                    if self._search_chat(name, expected_group=expected_group):
                         return self._chat_is_open(name)
                     return False
 
@@ -273,9 +354,10 @@ class ReplicaWeChatClient:
             self._uia_sender.calibrate_layout(save=False)
         return self._uia_sender
 
-    def _open_send_target(self, who: str) -> Any:
+    def _open_send_target(self, who: str, username: str) -> Any:
         sender = self._sender
-        if not sender.open_chat(who, exact=True):
+        expected_group = username.endswith("@chatroom")
+        if not sender.open_chat(who, exact=True, expected_group=expected_group):
             raise RuntimeError(f"无法打开微信发送目标: {who}")
         if not sender._chat_is_open(who):
             raise RuntimeError(f"微信发送目标校验失败: {who}")
@@ -460,7 +542,7 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
-            sender = self._open_send_target(who)
+            sender = self._open_send_target(who, username)
             box = self._safe_input_box(sender)
             if not sender.focus_input(box):
                 raise RuntimeError(f"微信输入框不可用: {who}")
@@ -488,7 +570,7 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
-            sender = self._open_send_target(who)
+            sender = self._open_send_target(who, username)
             box = self._safe_input_box(sender)
             if not sender.focus_input(box):
                 raise RuntimeError(f"微信输入框不可用: {who}")
