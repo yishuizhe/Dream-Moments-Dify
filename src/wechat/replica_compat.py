@@ -172,7 +172,10 @@ def _select_search_result(
                 row
                 for row in rows
                 if len(row) >= 5
-                and row[1] >= sidebar_right * 0.30
+                # On WeChat 4.1.12 the first OCR box may include the group
+                # avatar and begin around x=87 in a 300px sidebar. The old
+                # 30% cutoff (x=90) discarded that exact result by 3px.
+                and row[1] >= sidebar_right * 0.20
                 and most_top + 15 < row[2] < most_bottom
                 and _ocr_name_similarity(str(row[0] or ""), target) >= 0.55
             ], target)
@@ -202,7 +205,7 @@ def _select_search_result(
             row
             for row in rows
             if len(row) >= 5
-            and row[1] >= sidebar_right * 0.30
+            and row[1] >= sidebar_right * 0.20
             and group_top + 15 < row[2] < group_bottom
             and "包含" not in str(row[0] or "")
             and _ocr_name_similarity(str(row[0] or ""), target) >= 0.25
@@ -234,7 +237,7 @@ def _select_search_result(
         text, x, y, _width, _height = row[:5]
         if (
             y >= render_h * 0.47
-            or x < sidebar_right * 0.30
+            or x < sidebar_right * 0.20
             or "包含" in str(text or "")
             or "企业" in str(text or "")
         ):

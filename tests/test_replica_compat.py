@@ -232,6 +232,26 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(selected, rows[1])
 
+    def test_same_name_search_accepts_runtime_group_row_at_x_87(self):
+        rows = [
+            ("最常便用", 84, 83, 12, 11),
+            ("生@0问渠安全实验室", 87, 129, 32, 10),
+            ("裴怡淼0", 127, 181, 14, 12),
+            ("包含：裴怡淼〔企业：问渠安全实验室", 128, 206, 12, 11),
+            ("@问渠安全实验室", 177, 279, 23, 11),
+            ("企业：问渠安全实验室", 128, 302, 12, 11),
+        ]
+
+        selected = _select_search_result(
+            rows,
+            "问渠安全实验室",
+            sidebar_right=300,
+            render_h=815,
+            expected_group=True,
+        )
+
+        self.assertEqual(selected, rows[1])
+
     def test_same_name_search_selects_non_group_contact(self):
         rows = [
             ("@问渠安全实验室", 177, 215, 23, 11),
