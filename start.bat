@@ -6,6 +6,7 @@ cd /d "%~dp0"
 
 set "PY312=%LocalAppData%\Programs\Python\Python312\python.exe"
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
+set "VENV_PYW=%~dp0.venv\Scripts\pythonw.exe"
 
 if exist "%VENV_PY%" (
   set "PYTHON=%VENV_PY%"
@@ -44,6 +45,11 @@ if errorlevel 1 (
 )
 
 echo Starting config page / bot...
+if exist "%VENV_PYW%" (
+  start "" "%VENV_PYW%" run_config_web.py
+  exit /b 0
+)
+
 "%PYTHON%" run_config_web.py
 if errorlevel 1 (
   echo Program exited with error.
