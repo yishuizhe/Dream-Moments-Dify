@@ -101,6 +101,32 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         self.assertEqual(message.sender, "小红")
         self.assertEqual(client.ChatInfo()["chat_type"], "group")
 
+    def test_group_sender_prefix_overrides_stale_numeric_sender_mapping(self):
+        client, db = self.make_client()
+        client.BindContactId("测试群", "room@chatroom")
+        db.get_nickname.side_effect = lambda username: {
+            "wxid_stale": "错误昵称",
+            "wxid_actual": "真实昵称",
+            "room@chatroom": "测试群",
+        }.get(username, username)
+        db.get_messages.return_value = [
+            {
+                "local_id": 6,
+                "sort_seq": 60,
+                "sender_id": 19,
+                "sender_username": "wxid_stale",
+                "type": "文本",
+                "content": "wxid_actual:\n娜娜",
+            }
+        ]
+
+        client.ChatWith("测试群")
+        message = client.GetAllMessage()[0]
+
+        self.assertEqual(message.sender_id, "wxid_actual")
+        self.assertEqual(message.sender, "真实昵称")
+        self.assertEqual(message.content, "娜娜")
+
     def test_group_sender_prefix_overrides_ambiguous_self_direction(self):
         client, db = self.make_client()
         client.BindContactId("测试群", "room@chatroom")

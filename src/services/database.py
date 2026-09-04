@@ -544,6 +544,22 @@ class HistoryStore:
         if len(text) < 2:
             return False
         lowered = text.lower()
+        # A bare wake word or greeting is conversational glue, not a fact
+        # about the person. Keeping it in long-term memory both wastes the
+        # small memory window and can make a stale sender mapping look like an
+        # established identity.
+        normalized = re.sub(r"[\s@，。！？、,.!?~～]+", "", lowered)
+        if normalized in {
+            "娜娜",
+            "呐呐",
+            "在吗",
+            "在么",
+            "你好",
+            "嗨",
+            "hi",
+            "hello",
+        }:
+            return False
         blocked = (
             "sk-",
             "api_key",

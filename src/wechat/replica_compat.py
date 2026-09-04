@@ -685,7 +685,11 @@ class ReplicaWeChatClient:
         elif is_group:
             sender_username = str(row.get("sender_username") or "")
             if group_sender_prefix:
-                sender_username = sender_username or group_sender_prefix.group(1)
+                # The numeric real_sender_id index can lag behind/reuse rows
+                # after WeChat 4.1.12 database updates. The per-message wxid
+                # prefix is embedded in the group message itself and is the
+                # authoritative sender identity.
+                sender_username = group_sender_prefix.group(1)
                 content = content[group_sender_prefix.end() :]
             sender = self._display_name(sender_username) if sender_username else self._current_name
             stable_sender = sender_username or str(sender_id or sender)
