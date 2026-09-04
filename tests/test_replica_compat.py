@@ -15,6 +15,7 @@ from wechat.replica_compat import (
     _merge_search_ocr_rows,
     _ocr_name_similarity,
     _safe_ocr_name_matches,
+    _search_result_click_point,
     _select_search_result,
     _search_ocr_name_matches,
     _title_ocr_name_matches,
@@ -251,6 +252,32 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, rows[1])
+
+    def test_most_used_section_does_not_expand_to_distant_contains_marker(self):
+        rows = [
+            ("最常便用", 84, 83, 12, 11),
+            ("生@0问渠安全实验室", 87, 129, 32, 10),
+            ("裴怡淼", 128, 213, 14, 12),
+            ("@问渠安全实验室", 177, 215, 23, 11),
+            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("群聊", 84, 275, 11, 10),
+            ("包含：裴怡淼〔企业：问渠安全实验室", 128, 334, 12, 11),
+        ]
+
+        selected = _select_search_result(
+            rows,
+            "问渠安全实验室",
+            sidebar_right=300,
+            render_h=815,
+            expected_group=True,
+        )
+
+        self.assertEqual(selected, rows[1])
+
+    def test_search_result_click_uses_text_area_not_avatar(self):
+        row = ("生@0问渠安全实验室", 87, 129, 32, 10)
+
+        self.assertEqual(_search_result_click_point(row, 300), (165, 134))
 
     def test_same_name_search_selects_non_group_contact(self):
         rows = [
