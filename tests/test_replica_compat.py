@@ -12,6 +12,7 @@ if str(SRC) not in sys.path:
 
 from wechat.replica_compat import (
     ReplicaWeChatClient,
+    _merge_search_ocr_rows,
     _ocr_name_similarity,
     _safe_ocr_name_matches,
     _select_search_result,
@@ -172,17 +173,34 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         self.assertGreater(_ocr_name_similarity("开芯摸鱼小分対", target), 0.55)
         self.assertLess(_ocr_name_similarity("完全不同的群聊", target), 0.55)
 
+    def test_search_ocr_scales_keep_clearer_text_and_missing_headings(self):
+        merged = _merge_search_ocr_rows(
+            [
+                [("能@0问渠安", 87, 129, 32, 10)],
+                [
+                    ("问渠安", 88, 129, 12, 12),
+                    ("群聊", 84, 275, 11, 10),
+                ],
+            ],
+            "问渠安全实验室",
+        )
+
+        self.assertEqual(merged[0][0], "问渠安")
+        self.assertIn(("群聊", 84, 275, 11, 10), merged)
+
     def test_title_match_tolerates_one_glyph_but_rejects_another_chat(self):
         self.assertTrue(_title_ocr_name_matches("开芯摸鱼小分队（8）", "开心摸鱼小分队"))
         self.assertFalse(_title_ocr_name_matches("完全不同的群聊", "开心摸鱼小分队"))
 
     def test_same_name_search_selects_group_from_member_preview(self):
         rows = [
-            ("@问渠安全实验", 177, 119, 23, 11),
-            ("企业：问渠安全实室", 128, 142, 12, 11),
-            ("囤0问渠安金实验室", 97, 227, 9, 8),
-            ("包含：裴怡淼〔企业：问渠安全", 128, 302, 12, 11),
-            ("搜索网络结果", 85, 340, 14, 10),
+            ("裴怡淼", 128, 117, 14, 12),
+            ("包含：裴怡淼〔企业：问渠安全", 128, 142, 12, 11),
+            ("@问渠安全实验室", 177, 215, 23, 11),
+            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("群聊", 84, 275, 12, 11),
+            ("能@0问渠安", 87, 321, 32, 10),
+            ("搜索网络结果", 85, 372, 14, 10),
         ]
 
         selected = _select_search_result(
@@ -192,14 +210,34 @@ class ReplicaCompatibilityTests(unittest.TestCase):
             render_h=815,
             expected_group=True,
         )
-        self.assertEqual(selected, rows[2])
+        self.assertEqual(selected, rows[5])
+
+    def test_same_name_search_prefers_unique_group_in_most_used_section(self):
+        rows = [
+            ("最常便用", 84, 83, 12, 11),
+            ("问渠安", 128, 129, 12, 12),
+            ("包含：裴怡淼〔企业：", 128, 205, 12, 11),
+            ("@问渠安全实验室", 177, 278, 23, 11),
+            ("企业：问渠安全实验室", 128, 301, 12, 11),
+            ("搜索网络结果", 84, 340, 14, 10),
+        ]
+
+        selected = _select_search_result(
+            rows,
+            "问渠安全实验室",
+            sidebar_right=221,
+            render_h=815,
+            expected_group=True,
+        )
+
+        self.assertEqual(selected, rows[1])
 
     def test_same_name_search_selects_non_group_contact(self):
         rows = [
-            ("@问渠安全实验", 177, 119, 23, 11),
-            ("企业：问渠安全实室", 128, 142, 12, 11),
-            ("囤0问渠安金实验室", 97, 227, 9, 8),
-            ("包含：成员", 128, 302, 12, 11),
+            ("@问渠安全实验室", 177, 215, 23, 11),
+            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("群聊", 84, 275, 12, 11),
+            ("问渠安全实验室", 128, 321, 12, 12),
         ]
 
         selected = _select_search_result(
@@ -209,14 +247,14 @@ class ReplicaCompatibilityTests(unittest.TestCase):
             render_h=815,
             expected_group=False,
         )
-        self.assertEqual(selected, rows[0])
+        self.assertEqual(selected, rows[1])
 
     def test_multiple_same_name_groups_are_rejected(self):
         rows = [
-            ("同名群聊", 100, 100, 40, 12),
-            ("包含：甲", 120, 125, 40, 12),
+            ("群聊", 84, 80, 40, 12),
+            ("同名群聊", 100, 120, 40, 12),
             ("同名群聊", 100, 180, 40, 12),
-            ("包含：乙", 120, 205, 40, 12),
+            ("搜索网络结果", 84, 230, 40, 12),
         ]
 
         self.assertIsNone(
