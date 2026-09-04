@@ -43,6 +43,19 @@ class HistoryMemoryTests(unittest.TestCase):
         )
         self.assertEqual(self.store.get_memory_items(identity), [])
 
+    def test_bare_wake_words_and_greetings_are_not_saved_as_memory(self):
+        identity = make_identity_key("group-a", "member-1", True)
+        for content in ("娜娜", "@娜娜？", "在吗", "你好！", "hello"):
+            self.store.remember_user_message(
+                identity_key=identity,
+                chat_id="group-a",
+                sender_id="member-1",
+                sender_name="A",
+                content=content,
+            )
+
+        self.assertEqual(self.store.get_memory_items(identity), [])
+
     def test_history_can_filter_one_group_member(self):
         for sender, name, content in [
             ("1", "A", "a1"), ("2", "B", "b1"), ("1", "A", "a2")
