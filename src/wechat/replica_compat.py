@@ -130,6 +130,18 @@ def _collapse_search_rows_by_line(
     ]
 
 
+def _search_result_click_point(
+    row: tuple[Any, ...], sidebar_right: int
+) -> tuple[int, int]:
+    """Click the result text area instead of an avatar-shaped OCR box."""
+
+    _text, x, y, width, height = row[:5]
+    return max(
+        int(x) + int(width) // 2,
+        int(sidebar_right * 0.55),
+    ), int(y) + int(height) // 2
+
+
 def _select_search_result(
     rows: list[tuple[Any, ...]],
     target: str,
@@ -167,7 +179,9 @@ def _select_search_result(
                 and row[2] > most_top
                 and "包含" in str(row[0] or "")
             ]
-            most_bottom = min(related_markers or [most_top + 115])
+            # OCR may miss the light-grey next section heading. Do not let a
+            # distant `包含` marker absorb 联系人/群聊 into 最常使用.
+            most_bottom = min(related_markers + [most_top + 115])
             most_used_matches = _collapse_search_rows_by_line([
                 row
                 for row in rows
@@ -440,10 +454,10 @@ class ReplicaWeChatClient:
                     crop_top = int(self.render_h * 0.08)
                     ambiguous = False
                     for _ in range(3):
-                        sb = self._rel_to_screen(self.search_box)
-                        self._input.real_click(
-                            (sb[0] + sb[2]) // 2, (sb[1] + sb[3]) // 2
-                        )
+                        # Mouse hit-testing on WeChat's transparent render
+                        # child is intermittent. Ctrl+F deterministically
+                        # focuses the global search field.
+                        self._input.key(0x46, ctrl=True)  # VK_F
                         time.sleep(0.3)
                         self._input.key(VK_A, ctrl=True)
                         self._input.key(VK_DELETE)
@@ -472,9 +486,12 @@ class ReplicaWeChatClient:
                         )
                         if selected:
                             _text, x, y, width, height = selected
-                            self._input.real_click(
-                                self.origin_x + x + width // 2,
-                                self.origin_y + y + height // 2,
+                            click_x, click_y = _search_result_click_point(
+                                selected, self.sidebar_right
+                            )
+                            self.wx_click(
+                                self.origin_x + click_x,
+                                self.origin_y + click_y,
                             )
                             time.sleep(0.8)
                             if self._chat_is_open(name):
