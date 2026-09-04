@@ -71,6 +71,65 @@ def _title_ocr_name_matches(ocr_name: str, target: str) -> bool:
     return len(expected) >= 4 and _ocr_name_similarity(ocr_name, target) >= 0.72
 
 
+def _merge_search_ocr_rows(
+    batches: list[list[tuple[Any, ...]]], target: str
+) -> list[tuple[Any, ...]]:
+    """Merge two OCR scales, keeping the clearest text at each position."""
+
+    merged: list[tuple[Any, ...]] = []
+    for batch in batches:
+        for row in batch:
+            if len(row) < 5:
+                continue
+            same_index = next(
+                (
+                    index
+                    for index, current in enumerate(merged)
+                    if abs(current[1] - row[1]) <= 5
+                    and abs(current[2] - row[2]) <= 3
+                ),
+                None,
+            )
+            if same_index is None:
+                merged.append(row)
+                continue
+            current = merged[same_index]
+            current_rank = (
+                _ocr_name_similarity(str(current[0] or ""), target),
+                len(str(current[0] or "")),
+            )
+            row_rank = (
+                _ocr_name_similarity(str(row[0] or ""), target),
+                len(str(row[0] or "")),
+            )
+            if row_rank > current_rank:
+                merged[same_index] = row
+    return merged
+
+
+def _collapse_search_rows_by_line(
+    rows: list[tuple[Any, ...]], target: str
+) -> list[tuple[Any, ...]]:
+    """Collapse OCR fragments/scales that describe the same visual row."""
+
+    lines: list[list[tuple[Any, ...]]] = []
+    for row in sorted(rows, key=lambda item: item[2]):
+        if lines and abs(lines[-1][0][2] - row[2]) <= 3:
+            lines[-1].append(row)
+        else:
+            lines.append([row])
+    return [
+        max(
+            line,
+            key=lambda row: (
+                _ocr_name_similarity(str(row[0] or ""), target),
+                len(str(row[0] or "")),
+            ),
+        )
+        for line in lines
+    ]
+
+
 def _select_search_result(
     rows: list[tuple[Any, ...]],
     target: str,
@@ -88,13 +147,93 @@ def _select_search_result(
     refusing to send is safer than picking the first result.
     """
 
+    group_headers = _collapse_search_rows_by_line([
+        row for row in rows if len(row) >= 3 and "群聊" in str(row[0] or "")
+    ], target)
+    if expected_group is True:
+        most_used_headers = _collapse_search_rows_by_line([
+            row
+            for row in rows
+            if len(row) >= 3
+            and "常" in str(row[0] or "")
+            and "用" in str(row[0] or "")
+        ], target)
+        if len(most_used_headers) == 1:
+            most_top = most_used_headers[0][2]
+            related_markers = [
+                row[2]
+                for row in rows
+                if len(row) >= 3
+                and row[2] > most_top
+                and "包含" in str(row[0] or "")
+            ]
+            most_bottom = min(related_markers or [most_top + 115])
+            most_used_matches = _collapse_search_rows_by_line([
+                row
+                for row in rows
+                if len(row) >= 5
+                and row[1] >= sidebar_right * 0.30
+                and most_top + 15 < row[2] < most_bottom
+                and _ocr_name_similarity(str(row[0] or ""), target) >= 0.55
+            ], target)
+            if len(most_used_matches) == 1:
+                return most_used_matches[0]
+
+        enterprise_rows = [
+            row
+            for row in rows
+            if len(row) >= 3 and str(row[0] or "").strip().startswith("企业")
+        ]
+        if len(group_headers) == 1:
+            group_top = group_headers[0][2]
+        else:
+            return None
+        boundary_rows = [
+            row
+            for row in rows
+            if len(row) >= 3
+            and row[2] > group_top
+            and ("搜索" in str(row[0] or "") or "结果" in str(row[0] or ""))
+        ]
+        group_bottom = min(
+            [row[2] for row in boundary_rows] or [render_h * 0.48]
+        )
+        group_rows = _collapse_search_rows_by_line([
+            row
+            for row in rows
+            if len(row) >= 5
+            and row[1] >= sidebar_right * 0.30
+            and group_top + 15 < row[2] < group_bottom
+            and "包含" not in str(row[0] or "")
+            and _ocr_name_similarity(str(row[0] or ""), target) >= 0.25
+        ], target)
+        if len(group_rows) == 1:
+            return group_rows[0]
+        strong_rows = [
+            row
+            for row in group_rows
+            if _ocr_name_similarity(str(row[0] or ""), target) >= 0.55
+        ]
+        return strong_rows[0] if len(strong_rows) == 1 else None
+
+    enterprise_markers = [
+        row
+        for row in rows
+        if len(row) >= 5
+        and str(row[0] or "").strip().startswith("企业")
+        and row[1] >= sidebar_right * 0.30
+        and row[2] < render_h * 0.42
+    ]
+    if expected_group is False and len(enterprise_markers) == 1:
+        return enterprise_markers[0]
+
     candidates: list[dict[str, Any]] = []
     for row in rows:
         if len(row) < 5:
             continue
         text, x, y, _width, _height = row[:5]
         if (
-            y >= render_h * 0.35
+            y >= render_h * 0.47
             or x < sidebar_right * 0.30
             or "包含" in str(text or "")
             or "企业" in str(text or "")
@@ -244,9 +383,16 @@ class ReplicaWeChatClient:
                     return None
 
                 def ensure_visible(self) -> bool:
-                    self.bring_to_front(keep_topmost=False)
+                    if not self.bring_to_front(keep_topmost=True):
+                        self._minimize_blockers()
+                        time.sleep(0.4)
+                        if not self.bring_to_front(keep_topmost=True):
+                            return False
                     self._update_render_rect()
-                    return self.desktop_available()
+                    return (
+                        self._input._user32.GetForegroundWindow() == self.main_hwnd
+                        and self.desktop_available()
+                    )
 
                 @staticmethod
                 def _name_matches(ocr_name: str, target: str) -> bool:
@@ -301,9 +447,18 @@ class ReplicaWeChatClient:
                         self.set_clipboard(name)
                         self._input.key(VK_V, ctrl=True)
                         time.sleep(0.8)
-                        results = self.ocr_zoomed(
-                            (SIDEBAR_LEFT, crop_top, self.sidebar_right, self.render_h),
-                            scale=2,
+                        search_region = (
+                            SIDEBAR_LEFT,
+                            crop_top,
+                            self.sidebar_right,
+                            self.render_h,
+                        )
+                        results = _merge_search_ocr_rows(
+                            [
+                                self.ocr_zoomed(search_region, scale=3),
+                                self.ocr_zoomed(search_region, scale=4),
+                            ],
+                            name,
                         )
                         selected = _select_search_result(
                             results,
@@ -358,8 +513,10 @@ class ReplicaWeChatClient:
         sender = self._sender
         expected_group = username.endswith("@chatroom")
         if not sender.open_chat(who, exact=True, expected_group=expected_group):
+            sender.restore_zorder()
             raise RuntimeError(f"无法打开微信发送目标: {who}")
         if not sender._chat_is_open(who):
+            sender.restore_zorder()
             raise RuntimeError(f"微信发送目标校验失败: {who}")
         return sender
 
@@ -543,26 +700,28 @@ class ReplicaWeChatClient:
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
             sender = self._open_send_target(who, username)
-            box = self._safe_input_box(sender)
-            if not sender.focus_input(box):
-                raise RuntimeError(f"微信输入框不可用: {who}")
-            self._assert_send_target(sender, who)
-            from wechatauto.guia import VK_A, VK_DELETE, VK_RETURN, VK_V
-
-            sender.set_clipboard(msg)
-            sender._input.key(VK_A, ctrl=True)
-            sender._input.key(VK_DELETE)
-            sender._input.key(VK_V, ctrl=True)
-            time.sleep(0.35)
             try:
+                box = self._safe_input_box(sender)
+                if not sender.focus_input(box):
+                    raise RuntimeError(f"微信输入框不可用: {who}")
                 self._assert_send_target(sender, who)
-            except Exception:
-                # Never leave a pending reply in the wrong conversation.
+                from wechatauto.guia import VK_A, VK_DELETE, VK_RETURN, VK_V
+
+                sender.set_clipboard(msg)
                 sender._input.key(VK_A, ctrl=True)
                 sender._input.key(VK_DELETE)
-                raise
-            sender._input.key(VK_RETURN)
-            return True
+                sender._input.key(VK_V, ctrl=True)
+                time.sleep(0.35)
+                try:
+                    self._assert_send_target(sender, who)
+                except Exception:
+                    sender._input.key(VK_A, ctrl=True)
+                    sender._input.key(VK_DELETE)
+                    raise
+                sender._input.key(VK_RETURN)
+                return True
+            finally:
+                sender.restore_zorder()
 
     def SendFiles(self, filepath: str, who: str, **_: Any) -> Any:  # noqa: N802
         path = str(Path(filepath).expanduser().resolve())
@@ -571,28 +730,31 @@ class ReplicaWeChatClient:
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
             sender = self._open_send_target(who, username)
-            box = self._safe_input_box(sender)
-            if not sender.focus_input(box):
-                raise RuntimeError(f"微信输入框不可用: {who}")
-            self._assert_send_target(sender, who)
-            from wechatauto.guia import WeChatGUI
-
-            if not WeChatGUI.copy_files_to_clipboard([path]):
-                raise RuntimeError(f"无法复制待发送文件: {path}")
-            from wechatauto.guia import VK_RETURN, VK_V
-
-            sender._input.key(VK_V, ctrl=True)
-            time.sleep(0.8)
             try:
+                box = self._safe_input_box(sender)
+                if not sender.focus_input(box):
+                    raise RuntimeError(f"微信输入框不可用: {who}")
                 self._assert_send_target(sender, who)
-            except Exception:
-                from wechatauto.guia import VK_A, VK_DELETE
+                from wechatauto.guia import WeChatGUI
 
-                sender._input.key(VK_A, ctrl=True)
-                sender._input.key(VK_DELETE)
-                raise
-            sender._input.key(VK_RETURN)
-            return True
+                if not WeChatGUI.copy_files_to_clipboard([path]):
+                    raise RuntimeError(f"无法复制待发送文件: {path}")
+                from wechatauto.guia import VK_RETURN, VK_V
+
+                sender._input.key(VK_V, ctrl=True)
+                time.sleep(0.8)
+                try:
+                    self._assert_send_target(sender, who)
+                except Exception:
+                    from wechatauto.guia import VK_A, VK_DELETE
+
+                    sender._input.key(VK_A, ctrl=True)
+                    sender._input.key(VK_DELETE)
+                    raise
+                sender._input.key(VK_RETURN)
+                return True
+            finally:
+                sender.restore_zorder()
 
 
 def create_replica_client() -> ReplicaWeChatClient:
