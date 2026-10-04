@@ -15,6 +15,16 @@ from wechat.wxauto4_compat import create_wechat_client, needs_profile_popover_co
 
 
 class WxAuto4CompatibilityTests(unittest.TestCase):
+    def test_installed_free_backend_has_required_foreground_and_profile_apis(self):
+        from wxauto4 import WeChat
+        from wxauto4.ui.main import WeChatMainWnd
+        from wxauto4.uia import uiautomation
+
+        for name in ("ChatWith", "GetAllMessage", "SendMsg", "SendFiles", "GetSession"):
+            self.assertTrue(callable(getattr(WeChat, name, None)), name)
+        self.assertTrue(callable(WeChatMainWnd.get_my_info))
+        self.assertTrue(callable(uiautomation.Click))
+
     def test_unknown_version_keeps_upstream_behavior(self):
         self.assertFalse(needs_profile_popover_compat(None))
 
