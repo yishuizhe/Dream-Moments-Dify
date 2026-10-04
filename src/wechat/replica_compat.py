@@ -330,7 +330,7 @@ class ReplicaWeChatClient:
         except ImportError as exc:
             raise RuntimeError(
                 "微信 4.1.12+ 需要兼容组件，请执行: "
-                "python -m pip install wechatauto-replica==1.1.9"
+                "python -m pip install wechatauto-replica==1.2.4.4"
             ) from exc
 
         self._db = WeChatDB()
@@ -395,9 +395,29 @@ class ReplicaWeChatClient:
                         pass
                     return False
 
-                def _get_uia(self):
-                    # 4.1.12.55 exposes only an empty render shell through UIA.
-                    return None
+                def _get_uia(self, refresh: bool = False):
+                    # Newer WeChat builds expose search controls again. Keep
+                    # OCR target selection, but use upstream UIA focus helpers.
+                    return super()._get_uia(refresh=refresh)
+
+                def desktop_available(self) -> bool:
+                    # Upstream removed this method in 1.2.x; our OCR path still
+                    # needs a readable desktop before touching input controls.
+                    if not self.is_alive():
+                        return False
+                    try:
+                        image = self._grab_screen(self.render_rect).convert("RGB")
+                        pixels = [
+                            image.getpixel((x, y))
+                            for y in range(0, image.height, 16)
+                            for x in range(0, image.width, 16)
+                        ]
+                        return bool(pixels) and sum(
+                            all(channel > 230 for channel in pixel)
+                            for pixel in pixels
+                        ) / len(pixels) > 0.05
+                    except Exception:
+                        return False
 
                 def ensure_visible(self) -> bool:
                     if not self.bring_to_front(keep_topmost=True):
@@ -454,16 +474,27 @@ class ReplicaWeChatClient:
                     crop_top = int(self.render_h * 0.08)
                     ambiguous = False
                     for _ in range(3):
+                        uia = self._get_uia()
+                        if uia is not None:
+                            if not uia.back_to_chat_tab():
+                                return False
+                            box = uia._search_box(uia._win, expand=True)
+                            if box is None or not uia._click_ctrl(box):
+                                return False
+                            self._update_render_rect()
                         # Mouse hit-testing on WeChat's transparent render
                         # child is intermittent. Ctrl+F deterministically
                         # focuses the global search field.
-                        self._input.key(0x46, ctrl=True)  # VK_F
+                        if uia is None:
+                            self._input.key(0x46, ctrl=True)  # VK_F
                         time.sleep(0.3)
                         self._input.key(VK_A, ctrl=True)
                         self._input.key(VK_DELETE)
                         self.set_clipboard(name)
                         self._input.key(VK_V, ctrl=True)
                         time.sleep(0.8)
+                        if self._typed_into_chat_input(name):
+                            return False
                         search_region = (
                             SIDEBAR_LEFT,
                             crop_top,
@@ -668,29 +699,32 @@ class ReplicaWeChatClient:
         sender_id = row.get("sender_id")
         is_group = self._current_username.endswith("@chatroom")
         group_sender_prefix = _GROUP_SENDER_RE.match(content) if is_group else None
-        # In current WeChat 4.1.12 tables, sender_id=1 is the local account.
-        # Group members use other ids and plain-text rows normally include the
-        # real member wxid prefix.
-        if is_group:
-            is_self = not group_sender_prefix and (
-                sender_id in {1, "1"}
-                or str(sender_id) == self.myinfo.get("username")
-            )
+        sender_username = str(row.get("sender_username") or "").strip()
+        if sender_username.isdigit():
+            sender_username = ""
+        # get_messages() still skips rowid 2 in upstream 1.2.4.4. Resolve
+        # missing identities from SenderName2Id rather than assuming that a
+        # fixed numeric rowid belongs to the logged-in account.
+        if not sender_username and str(sender_id).isdigit():
+            index_getter = getattr(self._db, "_sender_id_index", None)
+            if callable(index_getter):
+                index = index_getter()
+                if isinstance(index, dict):
+                    sender_username = str(index.get(int(sender_id)) or "")
+        if group_sender_prefix:
+            sender_username = group_sender_prefix.group(1)
+            content = content[group_sender_prefix.end() :]
+        self_username = self.myinfo.get("username")
+        if sender_username:
+            is_self = sender_username == self_username
         else:
-            is_self = sender_id in {1, "1"} or str(sender_id) == self.myinfo.get("username")
+            # Legacy fallback when the database has no sender index entry.
+            is_self = sender_id in {1, "1"} or str(sender_id) == self_username
 
         if is_self:
             sender = self.nickname or "我"
             stable_sender = self.myinfo.get("username") or "self"
         elif is_group:
-            sender_username = str(row.get("sender_username") or "")
-            if group_sender_prefix:
-                # The numeric real_sender_id index can lag behind/reuse rows
-                # after WeChat 4.1.12 database updates. The per-message wxid
-                # prefix is embedded in the group message itself and is the
-                # authoritative sender identity.
-                sender_username = group_sender_prefix.group(1)
-                content = content[group_sender_prefix.end() :]
             sender = self._display_name(sender_username) if sender_username else self._current_name
             stable_sender = sender_username or str(sender_id or sender)
         else:
@@ -723,6 +757,9 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
+            from wechatauto import rhythm
+
+            rhythm.gate("send")
             sender = self._open_send_target(who, username)
             try:
                 box = self._safe_input_box(sender)
@@ -753,6 +790,9 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
+            from wechatauto import rhythm
+
+            rhythm.gate("send-file")
             sender = self._open_send_target(who, username)
             try:
                 box = self._safe_input_box(sender)

@@ -23,6 +23,12 @@ from wechat.replica_compat import (
 
 
 class ReplicaCompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not consume the real account's persisted write budget.
+        gate = patch("wechatauto.rhythm.gate")
+        self.gate = gate.start()
+        self.addCleanup(gate.stop)
+
     def make_client(self):
         db = MagicMock()
         db.get_self_info.return_value = {
@@ -167,6 +173,96 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
         client.ChatWith("测试群")
         self.assertEqual(client.GetAllMessage()[0].attr, "self")
+
+    def test_resolved_member_id_one_is_not_the_local_account(self):
+        client, _db = self.make_client()
+        client._current_username = "room@chatroom"
+        message = client._convert_message({
+            "sender_id": 1, "sender_username": "wxid_member",
+            "type": "图片", "content": "[图片]",
+        })
+        self.assertEqual(message.attr, "friend")
+        self.assertEqual(message.sender_id, "wxid_member")
+
+    def test_missing_sender_two_is_resolved_from_actual_database_index(self):
+        client, db = self.make_client()
+        client._current_username = "room@chatroom"
+        db._sender_id_index.return_value = {2: "wxid_member", 17: "wxid_self"}
+        for message_type in ("图片", "语音", "文件", "动画表情"):
+            with self.subTest(message_type=message_type):
+                message = client._convert_message({
+                    "sender_id": 2, "sender_username": "",
+                    "type": message_type, "content": "[媒体]",
+                })
+                self.assertEqual(message.attr, "friend")
+                self.assertEqual(message.sender_id, "wxid_member")
+        outgoing = client._convert_message({"sender_id": 17, "content": "我发的"})
+        self.assertEqual(outgoing.attr, "self")
+        self.assertEqual(outgoing.sender_id, "wxid_self")
+
+    def test_resolved_private_sender_overrides_numeric_direction(self):
+        client, _db = self.make_client()
+        client._current_username = "wxid_friend"
+        incoming = client._convert_message({
+            "sender_id": 1, "sender_username": "wxid_friend", "content": "你好",
+        })
+        outgoing = client._convert_message({
+            "sender_id": 19, "sender_username": "wxid_self", "content": "你好",
+        })
+        self.assertEqual(incoming.attr, "friend")
+        self.assertEqual(outgoing.attr, "self")
+
+    def test_self_group_prefix_is_stripped_and_does_not_trigger_a_reply(self):
+        client, _db = self.make_client()
+        client._current_username = "room@chatroom"
+        message = client._convert_message({
+            "sender_id": 19, "sender_username": "wxid_stale",
+            "content": "wxid_self:\n我在群里发的",
+        })
+        self.assertEqual(message.attr, "self")
+        self.assertEqual(message.content, "我在群里发的")
+
+    def make_gui(self):
+        client, _db = self.make_client()
+        with patch("wechatauto.guia.WeChatGUI.__init__", return_value=None):
+            return client._sender
+
+    def test_uia_refresh_is_forwarded_to_upstream(self):
+        gui = self.make_gui()
+        with patch("wechatauto.guia.WeChatGUI._get_uia", return_value="driver") as getter:
+            self.assertEqual(gui._get_uia(refresh=True), "driver")
+        getter.assert_called_once_with(refresh=True)
+
+    def test_desktop_probe_handles_removed_upstream_method_and_black_screen(self):
+        from PIL import Image
+
+        gui = self.make_gui()
+        gui.is_alive = MagicMock(return_value=True)
+        gui.render_rect = (0, 0, 32, 32)
+        gui._grab_screen = MagicMock(return_value=Image.new("RGB", (32, 32), "white"))
+        self.assertTrue(gui.desktop_available())
+        gui._grab_screen.return_value = Image.new("RGB", (32, 32), "black")
+        self.assertFalse(gui.desktop_available())
+        gui._grab_screen.side_effect = OSError("desktop locked")
+        self.assertFalse(gui.desktop_available())
+
+    def test_collapsed_search_uses_uia_and_aborts_if_paste_lands_in_chat(self):
+        gui = self.make_gui()
+        gui.render_h = 800
+        gui._update_render_rect = MagicMock()
+        uia = MagicMock()
+        gui._get_uia = MagicMock(return_value=uia)
+        gui._input = MagicMock()
+        gui.set_clipboard = MagicMock()
+        gui._typed_into_chat_input = MagicMock(return_value=True)
+        gui.ocr_zoomed = MagicMock()
+        with patch("wechat.replica_compat.time.sleep"):
+            self.assertFalse(gui._search_chat("测试群", expected_group=True))
+        uia.back_to_chat_tab.assert_called_once()
+        uia._search_box.assert_called_once_with(uia._win, expand=True)
+        uia._click_ctrl.assert_called_once()
+        gui.ocr_zoomed.assert_not_called()
+        self.assertNotIn(0x46, [call.args[0] for call in gui._input.key.call_args_list])
 
     def test_session_fields_match_polling_adapter(self):
         client, db = self.make_client()
@@ -358,6 +454,15 @@ class ReplicaCompatibilityTests(unittest.TestCase):
             "测试群", exact=True, expected_group=True
         )
         self.assertEqual(sender._chat_is_open.call_count, 3)
+        self.gate.assert_called_once_with("send")
+
+    def test_file_send_uses_upstream_write_gate_before_opening_target(self):
+        client, _db = self.make_client()
+        client._resolve_username = MagicMock(return_value="room@chatroom")
+        client._open_send_target = MagicMock(side_effect=RuntimeError("stop before input"))
+        with self.assertRaisesRegex(RuntimeError, "stop before input"):
+            client.SendFiles(str(ROOT / "README.md"), "测试群")
+        self.gate.assert_called_once_with("send-file")
 
     def test_text_send_aborts_if_target_changes_before_enter(self):
         client, _db = self.make_client()

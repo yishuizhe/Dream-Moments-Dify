@@ -8,7 +8,7 @@ This project preserves the original attribution and GPLv3 license. It does not b
 
 ## Highlights
 
-- Automatic WeChat backend selection: `wxauto4==41.1.2` for `4.1.11.x`, and `wechatauto-replica==1.1.9` for the self-rendered UI in WeChat `4.1.12+`.
+- Automatic WeChat backend selection: `wxauto4==41.1.2` for `4.1.11.x`, and `wechatauto-replica==1.2.4.4` for the self-rendered UI in WeChat `4.1.12+`.
 - Group renames keep working: listeners, history, and per-member memory use the stable WeChat conversation ID while the current display name is used for sending.
 - `GetSession()`-driven polling: chats are opened once to build a baseline, then only unread or preview-changed whitelisted chats are opened.
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
@@ -46,6 +46,16 @@ Group chat triggered with the bot name at the beginning:
 - Windows 10/11
 - A logged-in WeChat 4 client
 - Python `>=3.10,<3.14`
+
+### Upgrading to v2.1.5
+
+Stop the bot, run `python -m pip install -r requirements.txt` in its existing environment, and restart. Keep your local config, chat database, and avatars. The pinned backend is now `wechatauto-replica==1.2.4.4`.
+
+The facade uses upstream UIA helpers for collapsed search and returning from portrait chats, while retaining same-name selection and title verification. Sender direction uses resolved usernames and the database sender index; group text prefixes remain authoritative. This project consumes `WeChatDB.get_messages()` dictionaries rather than the upstream `msg.sender` display-name API.
+
+Text/file sends now use upstream `rhythm` throttling (default `natural`), in addition to application reply delays. Set `$env:WECHATAUTO_RHYTHM = "calm"` or `"fast"` before startup to adjust, or `"off"` for diagnostics. Write budgets persist across processes and can introduce cooldowns; incoming polling is unaffected. Run `python -m wechatauto doctor` for backend diagnostics.
+
+Automated regression and dependency checks cover this release. Live WeChat 4.1.15.x sending, Moments interactions, and original-image downloads still require validation on the corresponding client. Moments fixes are inherited from the backend; this release does not add Moments posting to the bot.
 
 ```powershell
 python -m pip install -r requirements.txt
