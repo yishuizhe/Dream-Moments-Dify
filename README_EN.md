@@ -55,7 +55,7 @@ The facade uses upstream UIA helpers for collapsed search and returning from por
 
 Text/file sends now use upstream `rhythm` throttling (default `natural`), in addition to application reply delays. Set `$env:WECHATAUTO_RHYTHM = "calm"` or `"fast"` before startup to adjust, or `"off"` for diagnostics. Write budgets persist across processes and can introduce cooldowns; incoming polling is unaffected. Run `python -m wechatauto doctor` for backend diagnostics.
 
-Automated regression and dependency checks cover this release. Live WeChat 4.1.15.x sending, Moments interactions, and original-image downloads still require validation on the corresponding client. Moments fixes are inherited from the backend; this release does not add Moments posting to the bot.
+Validation includes automated regression, dependency checks, and live WeChat 4.1.12.55 session/group reads plus text/file sends to File Transfer Assistant, confirmed by database readback. Live testing also found and fixed selection of File Transfer Assistant when an identically named web result is present. Live WeChat 4.1.15.x sending, Moments interactions, and original-image downloads still require validation on the corresponding client. Moments fixes are inherited from the backend; this release does not add Moments posting to the bot.
 
 ```powershell
 python -m pip install -r requirements.txt

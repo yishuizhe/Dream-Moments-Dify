@@ -159,6 +159,25 @@ def _select_search_result(
     refusing to send is safer than picking the first result.
     """
 
+    # This built-in chat also appears as a web search result. Only the
+    # 功能 section opens the real File Transfer Assistant conversation.
+    if target == "文件传输助手":
+        if expected_group is True:
+            return None
+        headings = _collapse_search_rows_by_line([
+            row for row in rows
+            if len(row) >= 5 and str(row[0] or "").strip() == "功能"
+        ], target)
+        if len(headings) != 1:
+            return None
+        top = headings[0][2]
+        matches = _collapse_search_rows_by_line([
+            row for row in rows
+            if len(row) >= 5 and top < row[2] < top + 100
+            and re.sub(r"\s+", "", str(row[0] or "")) == target
+        ], target)
+        return matches[0] if len(matches) == 1 else None
+
     group_headers = _collapse_search_rows_by_line([
         row for row in rows if len(row) >= 3 and "群聊" in str(row[0] or "")
     ], target)

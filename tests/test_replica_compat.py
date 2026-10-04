@@ -401,6 +401,23 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(_search_result_click_point(row, 300), (165, 134))
 
+    def test_filehelper_search_ignores_identical_web_result(self):
+        rows = [
+            ("搜索网络结果", 85, 84, 14, 10),
+            ("文件传输助手", 86, 113, 12, 12),
+            ("功能", 84, 149, 11, 11),
+            ("功能", 84, 150, 11, 11),
+            ("文件传输助手", 128, 196, 14, 12),
+        ]
+        self.assertEqual(_select_search_result(
+            rows, "文件传输助手", sidebar_right=300,
+            render_h=815, expected_group=False,
+        ), rows[4])
+        self.assertIsNone(_select_search_result(
+            rows[:2], "文件传输助手", sidebar_right=300,
+            render_h=815, expected_group=False,
+        ))
+
     def test_same_name_search_selects_non_group_contact(self):
         rows = [
             ("@问渠安全实验室", 177, 215, 23, 11),
