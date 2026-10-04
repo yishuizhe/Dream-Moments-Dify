@@ -241,13 +241,13 @@ Bearer Token。然后在 Dream 配置页的“Operit 安卓手机控制”中设
 等可信私网。Bearer Token 不应提交到 GitHub。即使启用了群聊命令，也必须同时配置
 发送者白名单，危险操作仍会要求一次性确认码。
 
-## 自研娜娜手机端（推荐）
+## 自研娜娜手机端（个人测试）
 
 仓库同时提供不依赖 Operit 的安卓执行端，源码位于 `android/NanaPhone`。它直接从安卓系统读取
 电量、型号、网络和存储，并通过无障碍服务执行打开应用、返回、点击、输入和滑动；请求使用
 时间戳、随机 nonce 与 HMAC-SHA256 签名，失败结果不会被模型补全。
 
-从 [GitHub Releases](https://github.com/yishuizhe/Dream-Moments-Dify/releases) 下载并安装 `NanaPhone-debug.apk` 后，在 App 中启动服务、复制配对密钥，再到配置页的
+`NanaPhone-debug.apk` 仅供维护者个人测试，不公开发行，GitHub Releases 不提供该 APK。需要研究此功能时，可从 `android/NanaPhone` 源码自行构建。安装自己的构建后，在 App 中启动服务、复制配对密钥，再到配置页的
 “娜娜自研手机端”填写手机地址与密钥并启用。启用后手机任务优先走自研端，不再交给 Operit；
 微信发送者白名单、会话白名单、群聊开关和危险操作确认继续沿用原手机控制安全设置。
 完整步骤见 `android/NanaPhone/README.md`。

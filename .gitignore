@@ -40,6 +40,8 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+# Android APKs are private test builds and are not publicly distributed.
+*.apk
 downloads/
 eggs/
 .eggs/

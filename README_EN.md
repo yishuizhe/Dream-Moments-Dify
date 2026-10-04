@@ -156,3 +156,6 @@ Tests cover message deduplication, unread-driven polling, quote triggers, group-
 - [umaru-233/My-Dream-Moments](https://github.com/umaru-233/My-Dream-Moments)
 
 Copyright remains with the respective original authors and contributors. This repository is distributed under [GNU GPLv3](LICENSE) without warranty. Third-party assets may have separate licenses documented next to those assets.
+
+
+NanaPhone debug APKs are maintainer-only private test builds and are not publicly distributed. Releases do not include an APK; the Android source remains available for study and local builds.
