@@ -52,18 +52,12 @@ def humanize_text(reply: str) -> str:
 def warm_short_reply(reply: str, user_text: str, sender_name: str = "") -> str:
     """Warm up only unmistakably cold acknowledgements and greetings."""
     value = str(reply or "").strip()
-    incoming = re.sub(r"[@＠\s\u2005]+", "", str(user_text or "")).lower()
-    incoming = incoming.replace("娜娜", "")
+    incoming = re.sub(r"[@＠][^\s]+", "", str(user_text or "")).lower()
+    incoming = re.sub(r"[@＠\s\u2005]+", "", incoming)
     compact_reply = re.sub(r"[\s，,。.!！?？~～]+", "", value)
-    familiar = "易师傅" if str(sender_name or "").strip() == "易水哲" else ""
 
     if re.fullmatch(r"(?:在吗|在么|在不在|人呢|在哪)", incoming):
         if compact_reply in {"在", "在呢", "嗯在呢", "我在", "在的"}:
-            if familiar:
-                return random.choice((
-                    "在呀，易师傅一叫我就冒泡啦～",
-                    "在呢，怎么突然来点我名呀？",
-                ))
             return random.choice(("在呀，怎么突然来点我名啦～", "在呢，你说嘛。"))
 
     if re.fullmatch(r"(?:你好|嗨|早上好|早安|晚上好|晚安)", incoming):

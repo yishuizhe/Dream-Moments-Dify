@@ -95,7 +95,7 @@ RUNTIME_SETTINGS_PATH = os.path.join(ROOT_DIR, "data", "web_runtime.json")
 def load_runtime_settings() -> None:
     """Load console-managed runtime values before any bot process is started."""
     try:
-        with open(RUNTIME_SETTINGS_PATH, "r", encoding="utf-8") as handle:
+        with open(RUNTIME_SETTINGS_PATH, "r", encoding="utf-8-sig") as handle:
             values = json.load(handle)
         if isinstance(values, dict):
             for key, value in values.items():
@@ -164,6 +164,7 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
         "语音配置": {},
         "Prompt配置": {},
         "微信轮询配置": {},
+        "主动消息与朋友圈": {},
         "Operit 手机控制": {},
         "娜娜自研手机端": {},
     }
@@ -242,6 +243,139 @@ def parse_config_groups() -> Dict[str, Dict[str, Any]]:
                 "value": config.wechat.exact_match,
                 "type": "boolean",
                 "description": "打开会话时是否精确匹配联系人或群名",
+            },
+        }
+    )
+
+    config_groups["主动消息与朋友圈"].update(
+        {
+            "PROACTIVE_ENABLED": {
+                "value": config.behavior.proactive.enabled,
+                "type": "boolean",
+                "description": "总开关：只在白名单会话中主动发消息",
+            },
+            "PROACTIVE_PRIVATE": {
+                "value": config.behavior.proactive.private_enabled,
+                "type": "boolean",
+                "description": "允许私聊主动消息",
+            },
+            "PROACTIVE_GROUP": {
+                "value": config.behavior.proactive.group_enabled,
+                "type": "boolean",
+                "description": "允许群聊主动发言",
+            },
+            "PROACTIVE_MIN": {
+                "value": config.behavior.proactive.min_minutes,
+                "type": "number",
+                "description": "两次主动消息的最小间隔（分钟）",
+            },
+            "PROACTIVE_MAX": {
+                "value": config.behavior.proactive.max_minutes,
+                "type": "number",
+                "description": "两次主动消息的最大间隔（分钟）",
+            },
+            "PROACTIVE_POKE": {
+                "value": config.behavior.proactive.poke_probability,
+                "type": "number",
+                "description": "群聊用拍一拍代替文字的概率（0-1）",
+            },
+            "PROACTIVE_TARGETS": {
+                "value": config.behavior.proactive.chat_targets,
+                "type": "array",
+                "description": "只在这些会话主动发言；留空表示全部白名单会话",
+            },
+            "QUIET_START": {
+                "value": config.behavior.quiet_time.start,
+                "description": "安静时间开始（HH:MM）",
+            },
+            "QUIET_END": {
+                "value": config.behavior.quiet_time.end,
+                "description": "安静时间结束（HH:MM）",
+            },
+            "MEMORY_ENABLED": {
+                "value": config.behavior.memory.enabled,
+                "type": "boolean",
+                "description": "启用遗忘曲线记忆",
+            },
+            "MEMORY_MAX_ITEMS": {
+                "value": config.behavior.memory.max_items,
+                "type": "number",
+                "description": "每个身份最多保留的记忆条数",
+            },
+            "MEMORY_INJECT": {
+                "value": config.behavior.memory.inject_items,
+                "type": "number",
+                "description": "每次回复最多注入的记忆条数",
+            },
+            "MEMORY_HALF_LIFE": {
+                "value": config.behavior.memory.half_life_days,
+                "type": "number",
+                "description": "记忆强度半衰期（天）",
+            },
+            "MEMORY_MIN_STRENGTH": {
+                "value": config.behavior.memory.min_strength,
+                "type": "number",
+                "description": "低于该强度会被遗忘（0-1）",
+            },
+            "MEME_ENABLED": {
+                "value": config.behavior.memes.enabled,
+                "type": "boolean",
+                "description": "根据聊天内容发送梗图",
+            },
+            "MEME_PROBABILITY": {
+                "value": config.behavior.memes.probability,
+                "type": "number",
+                "description": "每次回复后发梗图的概率（0-1）",
+            },
+            "MEME_COOLDOWN": {
+                "value": config.behavior.memes.cooldown_seconds,
+                "type": "number",
+                "description": "同一会话两次梗图的最小间隔（秒）",
+            },
+            "MEME_MAX_HOUR": {
+                "value": config.behavior.memes.max_per_hour,
+                "type": "number",
+                "description": "每小时最多发送梗图数量",
+            },
+            "MOMENTS_ENABLED": {
+                "value": config.behavior.moments.enabled,
+                "type": "boolean",
+                "description": "启用朋友圈浏览/点赞/评论",
+            },
+            "MOMENTS_INTERVAL": {
+                "value": config.behavior.moments.browse_interval_minutes,
+                "type": "number",
+                "description": "两次逛朋友圈的间隔（分钟）",
+            },
+            "MOMENTS_LIKE": {
+                "value": config.behavior.moments.like_probability,
+                "type": "number",
+                "description": "看到熟人动态时点赞的概率",
+            },
+            "MOMENTS_COMMENT": {
+                "value": config.behavior.moments.comment_probability,
+                "type": "number",
+                "description": "评论的概率",
+            },
+            "MOMENTS_PUBLISH": {
+                "value": config.behavior.moments.publish_enabled,
+                "type": "boolean",
+                "description": "实验性：尝试自动发朋友圈（OCR/UI，默认关闭）",
+            },
+            "MOMENTS_PUBLISH_PROB": {
+                "value": config.behavior.moments.publish_probability,
+                "type": "number",
+                "description": "每轮尝试发布的概率",
+            },
+            "MOMENTS_WHITELIST": {
+                "value": config.behavior.moments.whitelist_only,
+                "type": "boolean",
+                "description": "只与白名单联系人互动",
+            },
+            "MOMENTS_MAX_ACTIONS": {
+                "value": config.behavior.moments.max_actions_per_run,
+                "type": "number",
+                "description": "每轮最多点赞/评论次数",
             },
         }
     )
@@ -390,6 +524,11 @@ def save_config(new_config: Dict[str, Any]) -> bool:
             TextToSpeechSettings,
             MediaSettings,
             ContextSettings,
+            QuietTimeSettings,
+            ProactiveSettings,
+            MemorySettings,
+            MemeSettings,
+            MomentsSettings,
             BehaviorSettings,
             config
         )
@@ -494,6 +633,46 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                     )
                     if str(item).strip()
                 ],
+            ),
+            quiet_time=QuietTimeSettings(
+                start=str(new_config.get("QUIET_START", config.behavior.quiet_time.start)),
+                end=str(new_config.get("QUIET_END", config.behavior.quiet_time.end)),
+            ),
+            proactive=ProactiveSettings(
+                enabled=parse_bool(new_config.get("PROACTIVE_ENABLED", config.behavior.proactive.enabled)),
+                private_enabled=parse_bool(new_config.get("PROACTIVE_PRIVATE", config.behavior.proactive.private_enabled)),
+                group_enabled=parse_bool(new_config.get("PROACTIVE_GROUP", config.behavior.proactive.group_enabled)),
+                min_minutes=float(new_config.get("PROACTIVE_MIN", config.behavior.proactive.min_minutes)),
+                max_minutes=float(new_config.get("PROACTIVE_MAX", config.behavior.proactive.max_minutes)),
+                poke_probability=float(new_config.get("PROACTIVE_POKE", config.behavior.proactive.poke_probability)),
+                chat_targets=[
+                    str(item).strip()
+                    for item in new_config.get("PROACTIVE_TARGETS", config.behavior.proactive.chat_targets)
+                    if str(item).strip()
+                ],
+            ),
+            memory=MemorySettings(
+                enabled=parse_bool(new_config.get("MEMORY_ENABLED", config.behavior.memory.enabled)),
+                max_items=int(new_config.get("MEMORY_MAX_ITEMS", config.behavior.memory.max_items)),
+                inject_items=int(new_config.get("MEMORY_INJECT", config.behavior.memory.inject_items)),
+                half_life_days=float(new_config.get("MEMORY_HALF_LIFE", config.behavior.memory.half_life_days)),
+                min_strength=float(new_config.get("MEMORY_MIN_STRENGTH", config.behavior.memory.min_strength)),
+            ),
+            memes=MemeSettings(
+                enabled=parse_bool(new_config.get("MEME_ENABLED", config.behavior.memes.enabled)),
+                probability=float(new_config.get("MEME_PROBABILITY", config.behavior.memes.probability)),
+                cooldown_seconds=float(new_config.get("MEME_COOLDOWN", config.behavior.memes.cooldown_seconds)),
+                max_per_hour=int(new_config.get("MEME_MAX_HOUR", config.behavior.memes.max_per_hour)),
+            ),
+            moments=MomentsSettings(
+                enabled=parse_bool(new_config.get("MOMENTS_ENABLED", config.behavior.moments.enabled)),
+                browse_interval_minutes=float(new_config.get("MOMENTS_INTERVAL", config.behavior.moments.browse_interval_minutes)),
+                like_probability=float(new_config.get("MOMENTS_LIKE", config.behavior.moments.like_probability)),
+                comment_probability=float(new_config.get("MOMENTS_COMMENT", config.behavior.moments.comment_probability)),
+                publish_enabled=parse_bool(new_config.get("MOMENTS_PUBLISH", config.behavior.moments.publish_enabled)),
+                publish_probability=float(new_config.get("MOMENTS_PUBLISH_PROB", config.behavior.moments.publish_probability)),
+                whitelist_only=parse_bool(new_config.get("MOMENTS_WHITELIST", config.behavior.moments.whitelist_only)),
+                max_actions_per_run=int(new_config.get("MOMENTS_MAX_ACTIONS", config.behavior.moments.max_actions_per_run)),
             ),
         )
 
@@ -721,6 +900,42 @@ def save_config(new_config: Dict[str, Any]) -> bool:
                                 "description": "同一人身份映射：本人=私聊昵称|群昵称1|群昵称2（连续等号也可）",
                             },
                         },
+                        "quiet_time": {
+                            "start": {"value": behavior_settings.quiet_time.start, "type": "string", "description": "安静时间开始（HH:MM）"},
+                            "end": {"value": behavior_settings.quiet_time.end, "type": "string", "description": "安静时间结束（HH:MM）"},
+                        },
+                        "proactive": {
+                            "enabled": {"value": behavior_settings.proactive.enabled, "type": "boolean", "description": "总开关：只在白名单会话中主动发消息"},
+                            "private_enabled": {"value": behavior_settings.proactive.private_enabled, "type": "boolean", "description": "允许私聊主动消息"},
+                            "group_enabled": {"value": behavior_settings.proactive.group_enabled, "type": "boolean", "description": "允许群聊主动发言"},
+                            "min_minutes": {"value": behavior_settings.proactive.min_minutes, "type": "number", "description": "两次主动消息的最小间隔（分钟）"},
+                            "max_minutes": {"value": behavior_settings.proactive.max_minutes, "type": "number", "description": "两次主动消息的最大间隔（分钟）"},
+                            "poke_probability": {"value": behavior_settings.proactive.poke_probability, "type": "number", "description": "群聊用拍一拍代替文字的概率"},
+                            "chat_targets": {"value": behavior_settings.proactive.chat_targets, "type": "array", "description": "只在这些会话主动发言；留空表示全部白名单会话"},
+                        },
+                        "memory": {
+                            "enabled": {"value": behavior_settings.memory.enabled, "type": "boolean", "description": "启用遗忘曲线记忆"},
+                            "max_items": {"value": behavior_settings.memory.max_items, "type": "number", "description": "每个身份最多保留的记忆条数"},
+                            "inject_items": {"value": behavior_settings.memory.inject_items, "type": "number", "description": "每次回复最多注入的记忆条数"},
+                            "half_life_days": {"value": behavior_settings.memory.half_life_days, "type": "number", "description": "记忆强度半衰期（天）"},
+                            "min_strength": {"value": behavior_settings.memory.min_strength, "type": "number", "description": "低于该强度会被遗忘（0-1）"},
+                        },
+                        "memes": {
+                            "enabled": {"value": behavior_settings.memes.enabled, "type": "boolean", "description": "根据聊天内容发送梗图"},
+                            "probability": {"value": behavior_settings.memes.probability, "type": "number", "description": "每次回复后发梗图的概率"},
+                            "cooldown_seconds": {"value": behavior_settings.memes.cooldown_seconds, "type": "number", "description": "同一会话两次梗图的间隔（秒）"},
+                            "max_per_hour": {"value": behavior_settings.memes.max_per_hour, "type": "number", "description": "每小时最多发送梗图数量"},
+                        },
+                        "moments": {
+                            "enabled": {"value": behavior_settings.moments.enabled, "type": "boolean", "description": "启用朋友圈浏览/点赞/评论"},
+                            "browse_interval_minutes": {"value": behavior_settings.moments.browse_interval_minutes, "type": "number", "description": "两次逛朋友圈的间隔（分钟）"},
+                            "like_probability": {"value": behavior_settings.moments.like_probability, "type": "number", "description": "点赞概率"},
+                            "comment_probability": {"value": behavior_settings.moments.comment_probability, "type": "number", "description": "评论概率"},
+                            "publish_enabled": {"value": behavior_settings.moments.publish_enabled, "type": "boolean", "description": "实验性自动发朋友圈（默认关闭）"},
+                            "publish_probability": {"value": behavior_settings.moments.publish_probability, "type": "number", "description": "每轮尝试发布的概率"},
+                            "whitelist_only": {"value": behavior_settings.moments.whitelist_only, "type": "boolean", "description": "只与白名单联系人互动"},
+                            "max_actions_per_run": {"value": behavior_settings.moments.max_actions_per_run, "type": "number", "description": "每轮最多点赞/评论次数"},
+                        },
                     },
                 },
             }
@@ -783,7 +998,7 @@ def _save_runtime_settings(values: Dict[str, Any]) -> bool:
     current = {}
     try:
         if os.path.exists(RUNTIME_SETTINGS_PATH):
-            with open(RUNTIME_SETTINGS_PATH, "r", encoding="utf-8") as handle:
+            with open(RUNTIME_SETTINGS_PATH, "r", encoding="utf-8-sig") as handle:
                 loaded = json.load(handle)
                 if isinstance(loaded, dict):
                     current.update(loaded)
@@ -878,8 +1093,18 @@ def console_avatar():
             return jsonify({'status': 'error', 'message': str(exc)}), 400
     payload = request.get_json(silent=True) or {}
     name = payload.pop('avatar', 'MONO')
+    raw_content = str(payload.pop('raw_content', '') or '')
     try:
         path = get_avatar_file(name)
+        if raw_content.strip():
+            path.write_text(raw_content.rstrip() + "\n", encoding='utf-8')
+            return jsonify({'status': 'success', 'message': '人设已保存（完整文本）'})
+        existing = path.read_text(encoding='utf-8') if path.exists() else ""
+        if existing.strip() and not any(str(value).strip() for value in payload.values()):
+            return jsonify({
+                'status': 'error',
+                'message': '这份人设不是 8 段式格式，已拒绝用空内容覆盖；请直接编辑原始人设文本。',
+            }), 409
         lines = []
         for key, value in payload.items():
             if str(value).strip():

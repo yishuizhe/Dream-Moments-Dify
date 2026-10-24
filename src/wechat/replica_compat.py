@@ -23,6 +23,54 @@ _GROUP_SENDER_RE = re.compile(r"^(wxid_[0-9A-Za-z_]+):\s*\n")
 logger = logging.getLogger(__name__)
 
 
+def _room_member_display_names(data: bytes) -> dict[str, str]:
+    """Read member wxid/name fields from WeChat's RoomData protobuf."""
+    def fields(blob):
+        position = 0
+
+        def varint():
+            nonlocal position
+            value = 0
+            for shift in range(0, 70, 7):
+                if position >= len(blob):
+                    raise ValueError("truncated varint")
+                byte = blob[position]
+                position += 1
+                value |= (byte & 127) << shift
+                if byte < 128:
+                    return value
+            raise ValueError("invalid varint")
+
+        while position < len(blob):
+            tag = varint()
+            number, wire = tag >> 3, tag & 7
+            if not number:
+                raise ValueError("invalid field")
+            if wire == 0:
+                yield number, varint()
+                continue
+            size = varint() if wire == 2 else {1: 8, 5: 4}.get(wire)
+            if size is None or position + size > len(blob):
+                raise ValueError("invalid field length")
+            value = blob[position:position + size]
+            position += size
+            yield number, value
+
+    try:
+        result = {}
+        for number, member in fields(data):
+            if number != 1 or not isinstance(member, bytes):
+                continue
+            values = dict(fields(member))
+            username = values.get(1, b"").decode("utf-8")
+            display = values.get(2, b"").decode("utf-8")
+            if username and display:
+                result[username] = display
+        return result
+    except (ValueError, AttributeError, UnicodeError):
+        return {}
+
+
 def _safe_ocr_name_matches(ocr_name: str, target: str) -> bool:
     """Tolerate one clipped/extra edge character without broad fuzzy matches."""
 
@@ -417,6 +465,14 @@ class ReplicaWeChatClient:
                 def _get_uia(self, refresh: bool = False):
                     # Newer WeChat builds expose search controls again. Keep
                     # OCR target selection, but use upstream UIA focus helpers.
+                    # Some Chinese 4.1.15 clients also use the English window
+                    # title; upstream otherwise rejects their visible UIA tree.
+                    from wechatauto import uia_driver
+
+                    for attribute in ("MAIN_NAMES", "MAIN_NAME_HINTS"):
+                        names = getattr(uia_driver, attribute, ())
+                        if "WeChat" not in names:
+                            setattr(uia_driver, attribute, (*names, "WeChat"))
                     return super()._get_uia(refresh=refresh)
 
                 def desktop_available(self) -> bool:
@@ -575,7 +631,23 @@ class ReplicaWeChatClient:
                         return self._chat_is_open(name)
                     return False
 
-            self._uia_sender = SafeWeChatGUI()
+            from .wxauto4_compat import ensure_wechat_main_window
+
+            # WeChat can be living in the tray while its hidden window still
+            # exists; upstream WeChatGUI only accepts a visible window.
+            last_error: Exception | None = None
+            for attempt in range(2):
+                ensure_wechat_main_window(timeout=6.0)
+                try:
+                    self._uia_sender = SafeWeChatGUI()
+                    last_error = None
+                    break
+                except RuntimeError as exc:
+                    last_error = exc
+                    if attempt == 0:
+                        time.sleep(1.0)
+            if self._uia_sender is None:
+                raise last_error or RuntimeError("未找到微信主窗口，请确认微信已登录并运行")
             self._uia_sender.calibrate_layout(save=False)
         return self._uia_sender
 
@@ -611,6 +683,24 @@ class ReplicaWeChatClient:
 
     def GetMyInfo(self) -> dict[str, str]:  # noqa: N802
         return dict(self.myinfo)
+
+    def GetGroupMembers(self, chat_id: str) -> list[dict]:  # noqa: N802
+        if not str(chat_id).endswith("@chatroom"):
+            return []
+        members = [dict(item) for item in self._db.get_group_members(chat_id)]
+        connection = self._db._contact_conn()
+        if connection is None:
+            return members
+        try:
+            row = connection.execute(
+                "SELECT ext_buffer FROM chat_room WHERE username=?", (chat_id,)
+            ).fetchone()
+            names = _room_member_display_names(bytes(row[0])) if row and row[0] else {}
+            for member in members:
+                member["group_nickname"] = names.get(str(member.get("username") or ""), "")
+            return members
+        finally:
+            connection.close()
 
     def _display_name(self, username: str, *, refresh: bool = False) -> str:
         if username in self._username_to_name and not refresh:
@@ -836,6 +926,23 @@ class ReplicaWeChatClient:
                     raise
                 sender._input.key(VK_RETURN)
                 return True
+            finally:
+                sender.restore_zorder()
+
+
+    def Poke(self, who: str, **_: Any) -> bool:  # noqa: N802
+        """Poke a group member through the upstream OCR/UIA helper."""
+
+        with self._send_lock:
+            username = self._resolve_username(who)
+            if not username:
+                raise RuntimeError(f"无法解析拍一拍目标: {who}")
+            sender = self._open_send_target(who, username)
+            try:
+                uia = sender._get_uia()
+                if uia is None:
+                    return False
+                return bool(uia.poke(who))
             finally:
                 sender.restore_zorder()
 

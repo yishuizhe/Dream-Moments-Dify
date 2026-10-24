@@ -54,6 +54,18 @@ class WebConfigTests(unittest.TestCase):
         ):
             self.assertIn(key, groups["微信轮询配置"])
         self.assertIn("IDENTITY_ALIASES", groups["Prompt配置"])
+        self.assertIn("主动消息与朋友圈", groups)
+        for key in (
+            "PROACTIVE_ENABLED",
+            "PROACTIVE_PRIVATE",
+            "PROACTIVE_GROUP",
+            "PROACTIVE_TARGETS",
+            "MEMORY_ENABLED",
+            "MEME_ENABLED",
+            "MOMENTS_ENABLED",
+            "MOMENTS_PUBLISH",
+        ):
+            self.assertIn(key, groups["主动消息与朋友圈"])
         self.assertIn("图像生成配置", groups)
         for key in ("IMAGE_ENABLED", "IMAGE_API_KEY", "IMAGE_BASE_URL", "IMAGE_MODEL"):
             self.assertIn(key, groups["图像生成配置"])

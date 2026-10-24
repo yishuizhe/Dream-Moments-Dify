@@ -1,5 +1,5 @@
 {
-    "version": "2.1.5",
-    "last_update": "2026-10-04",
-    "description": "Upgrade wechatauto-replica to 1.2.4.4; resolve sender identities, restore desktop checks, and integrate search focus and write throttling."
+    "version": "2.2.0",
+    "last_update": "2026-10-24",
+    "description": "Claude persona, Baizhi deepseek-flash route, context memes, proactive messages, forgetting-curve memory, unified person identity, and Moments browsing/likes/comments with experimental publishing."
 }

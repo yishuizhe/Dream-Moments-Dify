@@ -30,9 +30,9 @@ class HumanizerTests(unittest.TestCase):
         self.assertEqual(humanize_text("这倒是，先看日志。"), "这倒是，先看日志。")
 
     def test_warms_cold_presence_reply_for_familiar_user(self):
-        warmed = warm_short_reply("嗯，在呢。", "@娜娜 在么", "易水哲")
+        warmed = warm_short_reply("嗯，在呢。", "@娜娜 在么", "张三")
         self.assertNotEqual(warmed, "嗯，在呢。")
-        self.assertTrue("易师傅" in warmed or "点我名" in warmed)
+        self.assertTrue(any(token in warmed for token in ("点我名", "你说嘛", "在呀")))
 
     def test_does_not_rewrite_a_substantive_reply(self):
         reply = "在呢，我刚好想和你说件事。"

@@ -17,6 +17,28 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+
+def sanitize_no_proxy_env() -> None:
+    """Drop IPv6 bracket entries that httpx's URLPattern cannot parse.
+
+    Some Windows proxy managers write ``NO_PROXY=...,[::1]``; httpx rejects
+    that pattern with ``InvalidURL: Invalid port`` while constructing an
+    OpenAI client. ``requests`` accepts it, so only the environment seen by
+    httpx needs cleaning.
+    """
+
+    for key in ("NO_PROXY", "no_proxy"):
+        raw = os.environ.get(key)
+        if not raw:
+            continue
+        kept = [
+            part
+            for part in str(raw).split(",")
+            if part.strip() and not part.strip().startswith("[")
+        ]
+        os.environ[key] = ",".join(kept)
+
+
 class DeepSeekAI:
     def __init__(self, api_key: str, base_url: str, model: str,
                  max_token: int, temperature: float, max_groups: int,
@@ -33,6 +55,7 @@ class DeepSeekAI:
         :param max_groups: 最大对话轮次记忆
         :param system_prompt: 系统级提示词
         """
+        sanitize_no_proxy_env()
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -53,6 +76,10 @@ class DeepSeekAI:
         self.provider_name = str(provider_name or "openai-compatible")
         self.is_zhipu = "open.bigmodel.cn" in str(base_url).lower()
         self.is_deepseek = "api.deepseek.com" in str(base_url).lower()
+        # Baizhi Cloud's OpenAI-compatible gateway also honours the vendor
+        # ``thinking`` switch; disabling it keeps short WeChat replies from
+        # spending the whole token budget on hidden reasoning.
+        self.is_baizhi = "baizhi.cloud" in str(base_url).lower()
         self.chat_contexts: Dict[str, List[Dict]] = {}
 
         # 安全字符白名单（可根据需要扩展）
@@ -238,7 +265,7 @@ class DeepSeekAI:
                 # GLM-4.7-Flash 默认思考时可能在较小 max_tokens 内只返回
                 # reasoning_content 而没有可发送的正文。微信闲聊默认关闭思考，
                 # 同时降低延迟和免费线路压力。
-                if self.is_zhipu or self.is_deepseek:
+                if self.is_zhipu or self.is_deepseek or self.is_baizhi:
                     request_config["extra_body"] = {"thinking": {"type": "disabled"}}
                 
                 # 使用 OpenAI 客户端发送请求

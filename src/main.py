@@ -3,12 +3,20 @@ from datetime import datetime
 import threading
 import time
 import os
-from services.database import HistoryStore, Session, ChatMessage, make_identity_key, resolve_identity
+from services.database import (
+    HistoryStore,
+    Session,
+    ChatMessage,
+    make_identity_key,
+    person_key_for,
+    resolve_identity,
+)
 from config import config
 from wechat.adapter import WxAuto4PollingAdapter
 import re
 from handlers.emoji import EmojiHandler
 from handlers.image import ImageHandler
+from handlers.meme import MemeHandler
 from handlers.message import MessageHandler
 from handlers.voice import VoiceHandler
 from handlers.image_recognition import (
@@ -21,6 +29,8 @@ from handlers.image_recognition import (
 from plugins.manager import PluginManager
 from services.operit import OperitBridge, OperitClient, OperitSessionStore
 from services.nana_phone import NanaPhoneClient, format_nana_phone_result
+from services.proactive import ProactiveService
+from services.moments import MomentsService
 from services.ai.moonshot import MoonShotAI
 from utils.cleanup import cleanup_pycache, CleanupUtils
 from utils.logger import LoggerConfig
@@ -206,13 +216,17 @@ class ChatBot:
                 f"对方曾让我用我自己的手机处理“{str(command).strip()}”；"
                 f"我处理后的结果是“{str(reply).strip()}”。"
             )
-            self.history_store.remember_user_message(
-                identity_key=identity_key,
-                chat_id=history_chat_id or chat_name,
-                sender_id=sender_id,
-                sender_name=sender_name,
-                content=memory,
-            )
+            if config.behavior.memory.enabled:
+                self.history_store.remember_user_message(
+                    identity_key=identity_key,
+                    chat_id=history_chat_id or chat_name,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    content=memory,
+                    max_items=config.behavior.memory.max_items,
+                    half_life_days=config.behavior.memory.half_life_days,
+                    min_strength=config.behavior.memory.min_strength,
+                )
         else:
             logger.info("未把失败或无数据的手机结果写入长期记忆")
         return reply
@@ -331,13 +345,34 @@ class ChatBot:
                 is_group,
                 config.behavior.context.identity_aliases,
             )
-            self.history_store.remember_user_message(
-                identity_key=identity_key,
-                chat_id=stable_chat_id,
-                sender_id=sender_id,
-                sender_name=username,
-                content=content,
+            # Long-term memory belongs to the person, not to one chat: the same
+            # wxid may talk in private, in several groups and on Moments.
+            memory_key = person_key_for(
+                sender_id,
+                username,
+                config.behavior.context.identity_aliases,
             )
+            register_person = getattr(self.history_store, "register_person", None)
+            if callable(register_person):
+                register_person(
+                    memory_key,
+                    username,
+                    chat_id=stable_chat_id,
+                    chat_name=chatName,
+                    is_group=bool(is_group),
+                    aliases=[username, configured_name],
+                )
+            if config.behavior.memory.enabled:
+                self.history_store.remember_user_message(
+                    identity_key=memory_key,
+                    chat_id=stable_chat_id,
+                    sender_id=sender_id,
+                    sender_name=username,
+                    content=content,
+                    max_items=config.behavior.memory.max_items,
+                    half_life_days=config.behavior.memory.half_life_days,
+                    min_strength=config.behavior.memory.min_strength,
+                )
 
             # Explicit phone-control commands bypass the ordinary chat model.
             # Operit runs in a daemon worker so a long phone task cannot stop
@@ -358,7 +393,7 @@ class ChatBot:
                     chat_name=chatName,
                     sender_id=sender_id,
                     sender_name=username,
-                    identity_key=identity_key,
+                    identity_key=memory_key,
                     is_group=bool(is_group),
                     command=command,
                     raw_result=raw_result,
@@ -568,6 +603,15 @@ ROBOT_WX_NAME = ""
 
 # Services that do not require a logged-in WeChat client.
 emoji_handler = EmojiHandler(root_dir)
+meme_handler = None
+if config.behavior.memes.enabled:
+    meme_handler = MemeHandler(
+        root_dir,
+        config.behavior.context.avatar_dir,
+        cooldown_seconds=config.behavior.memes.cooldown_seconds,
+        max_per_hour=config.behavior.memes.max_per_hour,
+        probability=config.behavior.memes.probability,
+    )
 image_handler = ImageHandler(
     root_dir=root_dir,
     api_key=config.llm.api_key,
@@ -598,6 +642,8 @@ else:
 history_store = HistoryStore()
 message_handler = None
 chat_bot = None
+proactive_service = None
+moments_service = None
 _daily_briefing_date = None
 
 
@@ -611,16 +657,15 @@ def seed_known_group_chats() -> None:
             continue
         if any(bool(item.get("is_group")) for item in recent):
             known_group_chats.add(str(name))
-    for name in ("我们都在用力的活着", "熬夜会猝", "牛马小家庭", "问渠安全实验室"):
-        if name in listen_list:
-            known_group_chats.add(name)
+    # Group identities are also restored from the local identity table below;
+    # no private group names are hard-coded here.
     if known_group_chats:
         logger.info("已预热群聊识别: %s", "、".join(sorted(known_group_chats)))
 
 def build_runtime() -> None:
     """Build services that depend on a logged-in WeChat client."""
 
-    global ROBOT_WX_NAME, message_handler, chat_bot
+    global ROBOT_WX_NAME, message_handler, chat_bot, proactive_service, moments_service
     ROBOT_WX_NAME = wechat_adapter.get_my_name()
     if not ROBOT_WX_NAME:
         ROBOT_WX_NAME = os.environ.get("DREAM_ROBOT_NAME", "").strip()
@@ -644,10 +689,18 @@ def build_runtime() -> None:
         prompt_content=prompt_content,
         image_handler=image_handler,
         emoji_handler=emoji_handler,
+        meme_handler=meme_handler,
         voice_handler=voice_handler,
         wechat=wechat_adapter,
         history_store=history_store,
         identity_aliases=config.behavior.context.identity_aliases,
+        memory_settings={
+            "enabled": config.behavior.memory.enabled,
+            "max_items": config.behavior.memory.max_items,
+            "inject_items": config.behavior.memory.inject_items,
+            "half_life_days": config.behavior.memory.half_life_days,
+            "min_strength": config.behavior.memory.min_strength,
+        },
         fallback_routes=[
             {
                 "name": route.name,
@@ -665,6 +718,7 @@ def build_runtime() -> None:
     plugin_manager.configure_services(
         history_store=history_store,
         ai_responder=message_handler.generate_summary_response,
+        member_directory=wechat_adapter.get_group_members,
     )
     operit_bridge = None
     try:
@@ -715,6 +769,26 @@ def build_runtime() -> None:
         plugin_manager=plugin_manager,
         history_store=history_store,
         operit_bridge=operit_bridge,
+    )
+    proactive_service = ProactiveService(
+        wechat=wechat_adapter,
+        message_handler=message_handler,
+        history_store=history_store,
+        settings=config.behavior.proactive,
+        quiet_time=config.behavior.quiet_time,
+        state_path=os.path.join(root_dir, "data", "proactive_state.json"),
+        is_group=is_group_target,
+        logger_=logger,
+    )
+    moments_service = MomentsService(
+        wechat=wechat_adapter,
+        message_handler=message_handler,
+        history_store=history_store,
+        settings=config.behavior.moments,
+        state_path=os.path.join(root_dir, "data", "moments_state.json"),
+        contacts=list(listen_list),
+        quiet_time=config.behavior.quiet_time,
+        logger_=logger,
     )
     seed_known_group_chats()
     try:
@@ -898,6 +972,18 @@ def main():
         listener_thread = threading.Thread(target=message_listener, daemon=True)
         listener_thread.start()
         threading.Thread(target=daily_briefing_loop, args=(briefing_stop,), daemon=True).start()
+        if proactive_service is not None:
+            threading.Thread(
+                target=proactive_service.run,
+                args=(briefing_stop,),
+                daemon=True,
+            ).start()
+        if moments_service is not None:
+            threading.Thread(
+                target=moments_service.run,
+                args=(briefing_stop,),
+                daemon=True,
+            ).start()
         print_status("机器人已启动，正在等待新消息", "success", "✅")
 
         # 主循环

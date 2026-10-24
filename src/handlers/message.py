@@ -15,7 +15,7 @@ from collections import deque
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
-from services.database import HistoryStore, Session, ChatMessage, resolve_identity
+from services.database import HistoryStore, Session, ChatMessage, resolve_identity, person_key_for
 import random
 import os
 from services.ai.dify import DifyAI
@@ -49,6 +49,8 @@ class MessageHandler:
         history_store=None,
         identity_aliases=None,
         fallback_routes=None,
+        meme_handler=None,
+        memory_settings=None,
     ):
         self.root_dir = root_dir
         self.api_key = api_key
@@ -104,7 +106,15 @@ class MessageHandler:
         # 添加 handlers
         self.image_handler = image_handler
         self.emoji_handler = emoji_handler
+        self.meme_handler = meme_handler
         self.voice_handler = voice_handler
+        self.memory_config = {
+            "max_items": 40,
+            "inject_items": 8,
+            "half_life_days": 14.0,
+            "min_strength": 0.12,
+            **(memory_settings or {}),
+        }
         self._reply_lock = threading.Lock()
         # AI generation and foreground WeChat sending share external resources.
         # Process one debounced batch end-to-end so concurrent timer threads
@@ -137,6 +147,19 @@ class MessageHandler:
             if session is not None:
                 session.close()
 
+    def _memory_options(self) -> dict:
+        defaults = {
+            "enabled": True,
+            "max_items": 40,
+            "inject_items": 8,
+            "half_life_days": 14.0,
+            "min_strength": 0.12,
+        }
+        current = getattr(self, "memory_config", None)
+        if isinstance(current, dict):
+            defaults.update(current)
+        return defaults
+
     def get_api_response(
         self,
         message: str,
@@ -148,6 +171,8 @@ class MessageHandler:
         identity_aliases: list[str] | None = None,
         chat_id: str = "",
         task_type: str = "chat",
+        memory_key: str = "",
+        sender_id: str = "",
     ) -> str:
         """Get a reply with per-member memory and optional group transcript."""
         context_parts = []
@@ -183,19 +208,68 @@ class MessageHandler:
             else:
                 context_parts.append("本群最近几小时没有足够新记录，请只回应当前这句话，不要编造群内正在发生的话题。")
         memories = []
-        if identity_key:
+        profile = None
+        memory_options = self._memory_options()
+        memory_enabled = bool(memory_options["enabled"])
+        if memory_key:
+            profile_reader = getattr(self.history_store, "get_person_profile", None)
+            if callable(profile_reader):
+                try:
+                    profile = profile_reader(memory_key)
+                except Exception:
+                    profile = None
+            person_reader = getattr(self.history_store, "get_memory_items_for_person", None)
+            if memory_enabled:
+                if callable(person_reader):
+                    memories = person_reader(
+                        memory_key,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        identity_aliases=identity_aliases,
+                        limit=int(memory_options["inject_items"]),
+                        half_life_days=float(memory_options["half_life_days"]),
+                        min_strength=float(memory_options["min_strength"]),
+                    )
+                else:
+                    # Lightweight/test stores may only implement the older reader.
+                    alias_reader = getattr(self.history_store, "get_memory_items_for_aliases", None)
+                    if callable(alias_reader):
+                        memories = alias_reader(identity_key, identity_aliases)
+                    elif identity_key:
+                        memories = self.history_store.get_memory_items(identity_key)
+        elif identity_key and memory_enabled:
             alias_reader = getattr(self.history_store, "get_memory_items_for_aliases", None)
             if callable(alias_reader):
                 memories = alias_reader(identity_key, identity_aliases)
             else:
                 # Third-party history stores can keep the pre-alias interface.
                 memories = self.history_store.get_memory_items(identity_key)
+        if profile:
+            names = [
+                str(item).strip()
+                for item in profile.get("aliases") or []
+                if str(item).strip()
+                and not str(item).startswith("wxid_")
+                and not str(item).endswith("@chatroom")
+            ]
+            chats = [
+                str(item.get("chat_name") or item.get("chat_id") or "").strip()
+                for item in profile.get("chats") or []
+                if str(item.get("chat_name") or item.get("chat_id") or "").strip()
+            ]
+            if names or chats:
+                context_parts.append(
+                    "你认识这个人："
+                    + (f"叫过 {'、'.join(dict.fromkeys(names[-4:]))}；" if names else "")
+                    + (f"在 {'、'.join(dict.fromkeys(chats[-4:]))} 里聊过；" if chats else "")
+                    + "不管在私聊、群聊还是朋友圈，都是同一个人。"
+                )
         if memories:
             memory_lines = "\n".join(f"- {item}" for item in memories[-8:])
             who = sender_name or "当前成员"
             context_parts.append(
                 f"只属于【{who}】的过往记忆片段（是以前说过的话，不是此刻正在发生的事；"
-                f"不要据此声称“刚刚看到你们在聊某事”）：\n{memory_lines}"
+                f"越靠前越清晰，已经模糊的不要当成确定事实）：\n{memory_lines}"
             )
         request_message = message
         if getattr(self, "ai_provider", "deepseek") == "dify" and context_parts:
@@ -226,6 +300,82 @@ class MessageHandler:
             if callable(clear):
                 clear(context_key)
 
+    def generate_proactive_message(
+        self,
+        chat_id: str,
+        *,
+        is_group: bool,
+        transcript: str = "",
+        mode: str = "topic",
+        sender_name: str = "",
+    ) -> str:
+        """One short unprompted line that fits the recent conversation."""
+
+        if is_group and mode == "join" and transcript:
+            instruction = (
+                "你是这个群里的成员。下面是群里最近的聊天记录。"
+                "自然接一句或顺着话题发一句自己的看法，可以吐槽、发牢骚、玩梗，"
+                "但必须贴合记录里真实存在的话题，不要编造没发生的事；"
+                "不要问大家在干嘛，不要连续追问，不要提 AI、模型、系统或后台。"
+                "只输出一句很短的话。\n\n群聊记录：\n" + transcript
+            )
+        elif is_group:
+            instruction = (
+                "你想在群里冒个泡。可以分享一件小事、发一句轻松的牢骚，"
+                "或者开一个大家容易接的小话题；要像群成员随口说话，"
+                "不要问‘在吗’，不要查户口，不要提 AI、模型、系统或后台。只输出一句很短的话。"
+                + (f"\n\n群里最近的聊天记录（只作氛围参考，不要当成正在发生）：\n{transcript}" if transcript else "")
+            )
+        else:
+            instruction = (
+                "你想主动找对方聊一句。像熟人一样自然，可以关心、吐槽、分享自己刚想到的事，"
+                "不要用客服式开场，不要一次问太多，不要提 AI、模型、系统或后台。只输出一句很短的话。"
+                + (f"\n\n你们最近的聊天记录（只作参考，不要当成此刻正在发生）：\n{transcript}" if transcript else "")
+            )
+        context_key = f"proactive:{chat_id}:{time.time_ns()}"
+        task_type = "group_proactive" if is_group else "private_proactive"
+        try:
+            reply = self.ai.get_response(
+                instruction,
+                context_key,
+                build_system_prompt(
+                    self.prompt_content,
+                    is_group=is_group,
+                    task_type=task_type,
+                ),
+            )
+            return normalize_reply_text(reply)
+        finally:
+            clear = getattr(self.ai, "clear_history", None) or getattr(self.ai, "clear_context", None)
+            if callable(clear):
+                clear(context_key)
+
+    def generate_auxiliary_text(
+        self,
+        prompt: str,
+        *,
+        context_key: str,
+        is_group: bool = True,
+        task_type: str = "moment",
+    ) -> str:
+        """Small isolated generation used by Moments comments/posts."""
+
+        try:
+            reply = self.ai.get_response(
+                prompt,
+                context_key,
+                build_system_prompt(
+                    self.prompt_content,
+                    is_group=is_group,
+                    task_type=task_type,
+                ),
+            )
+            return normalize_reply_text(reply)
+        finally:
+            clear = getattr(self.ai, "clear_history", None) or getattr(self.ai, "clear_context", None)
+            if callable(clear):
+                clear(context_key)
+
     def generate_phone_result_response(
         self,
         *,
@@ -237,6 +387,8 @@ class MessageHandler:
         identity_key: str = "",
         identity_aliases: list[str] | None = None,
         chat_id: str = "",
+        memory_key: str = "",
+        sender_id: str = "",
     ) -> str:
         """Let Nana turn an Operit execution trace into her own concise reply."""
 
@@ -259,6 +411,8 @@ class MessageHandler:
             identity_aliases=identity_aliases,
             chat_id=chat_id,
             task_type="phone_result",
+            memory_key=memory_key,
+            sender_id=sender_id,
         )
         return normalize_reply_text(reply)
 
@@ -331,6 +485,37 @@ class MessageHandler:
             is_group=is_group,
         )
 
+    def _send_meme_if_relevant(
+        self,
+        chat_id: str,
+        reply_target: str,
+        user_text: str,
+        reply: str,
+        *,
+        probability: float | None = None,
+    ) -> bool:
+        """Send one context-matched meme after a normal text reply."""
+
+        handler = getattr(self, "meme_handler", None)
+        if handler is None:
+            return False
+        try:
+            explicit = handler.is_explicit_request(user_text)
+            path = handler.pick(
+                f"{user_text}\n{reply}",
+                chat_id=chat_id,
+                explicit=explicit,
+                probability=probability,
+            )
+            if not path:
+                return False
+            self.wx.SendFiles(filepath=path, who=reply_target)
+            logger.info("已发送梗图: %s", path)
+            return True
+        except Exception as exc:  # noqa: BLE001 - never break a reply for a meme
+            logger.warning("发送梗图失败: %s", type(exc).__name__)
+            return False
+
     def process_messages(self, queue_key: str):
         """Serialize complete AI + send jobs created by debounce timers."""
 
@@ -378,6 +563,13 @@ class MessageHandler:
             is_group,
             getattr(self, "identity_alias_rules", []),
         )
+        # The conversation context stays scoped to this chat; long-term memory
+        # follows the real person across private chat, groups and Moments.
+        memory_key = person_key_for(
+            username,
+            sender_name,
+            getattr(self, "identity_alias_rules", []),
+        )
         # 每个人独立会话记忆，避免把整个群当成同一个人
         conversation_key = identity_key
         task_type = "chat"
@@ -421,7 +613,20 @@ class MessageHandler:
             self._record_assistant_reply(chat_id, reply, is_group)
             return
         if latest_content == "查看我的记忆":
-            memories = self.history_store.get_memory_items(identity_key)
+            reader = getattr(self.history_store, "get_memory_items_for_person", None)
+            if callable(reader):
+                memories = reader(
+                    memory_key,
+                    sender_id=username,
+                    sender_name=sender_name,
+                    identity_aliases=getattr(self, "identity_alias_rules", []),
+                    limit=12,
+                    half_life_days=float(self._memory_options()["half_life_days"]),
+                    min_strength=float(self._memory_options()["min_strength"]),
+                    touch=False,
+                )
+            else:
+                memories = self.history_store.get_memory_items(identity_key)
             reply = (
                 "我记得你最近说过：\n" + "\n".join(f"- {item}" for item in memories)
                 if memories else "我还没有保存你的本地记忆。"
@@ -430,7 +635,11 @@ class MessageHandler:
             self._record_assistant_reply(chat_id, reply, is_group)
             return
         if latest_content == "清除我的记忆":
-            self.history_store.clear_memory(identity_key)
+            clearer = getattr(self.history_store, "clear_person_memory", None)
+            if callable(clearer):
+                clearer(memory_key, sender_id=username)
+            else:
+                self.history_store.clear_memory(identity_key)
             reply = "已清除只属于你的本地记忆。"
             self._send_text_reply(reply_target, reply)
             self._record_assistant_reply(chat_id, reply, is_group)
@@ -456,7 +665,8 @@ class MessageHandler:
                         prompt_for_ai, conversation_key, is_group=is_group,
                         sender_name=sender_name, identity_key=identity_key,
                         identity_aliases=matched_aliases,
-                        chat_id=chat_id, task_type=task_type
+                        chat_id=chat_id, task_type=task_type,
+                        memory_key=memory_key, sender_id=username,
                     )
                 ))
                 reply = warm_short_reply(reply, latest_content, sender_name)
@@ -579,7 +789,8 @@ class MessageHandler:
                         prompt_for_ai, conversation_key, is_group=is_group,
                         sender_name=sender_name, identity_key=identity_key,
                         identity_aliases=matched_aliases,
-                        chat_id=chat_id, task_type=task_type
+                        chat_id=chat_id, task_type=task_type,
+                        memory_key=memory_key, sender_id=username,
                     )
                 ))
                 reply = warm_short_reply(reply, latest_content, sender_name)
@@ -601,6 +812,7 @@ class MessageHandler:
                 # 检查回复中是否包含情感关键词并发送表情包
                 logger.info("开始检查AI回复的情感关键词")
                 emotion_detected = False
+                emoji_sent = False
 
                 try:
                     if not hasattr(self.emoji_handler, 'emotion_map'):
@@ -619,6 +831,7 @@ class MessageHandler:
                             if emoji_path:
                                 try:
                                     self.wx.SendFiles(filepath=emoji_path, who=reply_target)
+                                    emoji_sent = True
                                     logger.info(f"已发送情感表情包: {emoji_path}")
                                 except Exception as e:
                                     logger.error(f"发送表情包失败: {str(e)}")
@@ -631,6 +844,17 @@ class MessageHandler:
 
                 except Exception as e:
                     logger.error(f"情感检测过程发生错误: {str(e)}")
+
+                # 情绪表情优先；如果没有发情绪图，则按概率补一张梗图。
+                if not emoji_sent:
+                    self._send_meme_if_relevant(
+                        chat_id, reply_target, latest_content, reply
+                    )
+                else:
+                    # 已经发了情绪表情，仍保留一个小概率发梗图的机会。
+                    self._send_meme_if_relevant(
+                        chat_id, reply_target, latest_content, reply, probability=0.12
+                    )
 
                 # 异步保存消息记录
                 threading.Thread(target=self.save_message,

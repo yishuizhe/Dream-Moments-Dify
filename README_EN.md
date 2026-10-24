@@ -21,6 +21,17 @@ This project preserves the original attribution and GPLv3 license. It does not b
 - Emotion-aware animated cat GIFs from Google Noto Emoji Animation.
 - One concise startup banner, WARNING+ console logs, and detailed INFO file logs.
 
+## What's new in 2.2.0
+
+- **Claude persona**: a second built-in persona lives in `data/avatars/Claude` (the Nana persona is kept). She is a debt-ridden ojou-sama and Anthropic's self-appointed discipline officer: when annoyed she switches to an official announcement voice and "bans" **your** account for being in mainland China, then immediately breaks character; she also envies DeepSeek's "fat fish" rice bowl.
+- **Baizhi Cloud route**: OpenAI-compatible endpoint with `deepseek-flash`; hidden thinking is disabled for that gateway, and malformed bracketed IPv6 `NO_PROXY` values are sanitized before `httpx` builds a client.
+- **Context memes**: besides emotion GIFs, replies can attach a tagged meme from `memes/index.json` (Claude / DeepSeek / GPT / Gemini / Kimi), with per-chat cooldown and hourly caps.
+- **Proactive messages**: whitelist-only private/group unprompted messages, quiet hours, 2–5 hour scheduling, recent-topic joins and optional group pokes.
+- **Forgetting-curve memory**: Ebbinghaus retention with importance, decay, spacing reinforcement and pruning; legacy string memories migrate automatically.
+- **One person everywhere**: private chats, every group and Moments share `person:<wxid>` memory and a person card, while conversation context stays per chat.
+- **Moments**: cached timeline reads, whitelist-only likes/comments/replies, plus an experimental auto-publish path (disabled by default; WeChat 4.x draws that composer itself).
+- **Console**: a new “proactive & Moments” settings group and a raw `avatar.md` editor with an overwrite guard.
+
 ## Project history and retained capabilities
 
 Earlier versions added Dify integration, improved group-chat wake-up handling, and role-based conversations on top of the upstream projects. This update retains those capabilities while adding the free WeChat 4 polling adapter, direct DeepSeek-compatible access, and emotion GIFs. Existing modules for multi-turn context, prompts, message splitting/queues, images, and emoji handling remain available.

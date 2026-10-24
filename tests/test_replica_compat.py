@@ -299,16 +299,16 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_search_ocr_scales_keep_clearer_text_and_missing_headings(self):
         merged = _merge_search_ocr_rows(
             [
-                [("能@0问渠安", 87, 129, 32, 10)],
+                [("能@0赤霄安", 87, 129, 32, 10)],
                 [
-                    ("问渠安", 88, 129, 12, 12),
+                    ("赤霄安", 88, 129, 12, 12),
                     ("群聊", 84, 275, 11, 10),
                 ],
             ],
-            "问渠安全实验室",
+            "赤霄安全实验室",
         )
 
-        self.assertEqual(merged[0][0], "问渠安")
+        self.assertEqual(merged[0][0], "赤霄安")
         self.assertIn(("群聊", 84, 275, 11, 10), merged)
 
     def test_title_match_tolerates_one_glyph_but_rejects_another_chat(self):
@@ -317,18 +317,18 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
     def test_same_name_search_selects_group_from_member_preview(self):
         rows = [
-            ("裴怡淼", 128, 117, 14, 12),
-            ("包含：裴怡淼〔企业：问渠安全", 128, 142, 12, 11),
-            ("@问渠安全实验室", 177, 215, 23, 11),
-            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("张小明", 128, 117, 14, 12),
+            ("包含：张小明〔企业：赤霄安全", 128, 142, 12, 11),
+            ("@赤霄安全实验室", 177, 215, 23, 11),
+            ("企业：赤霄安全实验室", 128, 238, 12, 11),
             ("群聊", 84, 275, 12, 11),
-            ("能@0问渠安", 87, 321, 32, 10),
+            ("能@0赤霄安", 87, 321, 32, 10),
             ("搜索网络结果", 85, 372, 14, 10),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=261,
             render_h=815,
             expected_group=True,
@@ -338,16 +338,16 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_same_name_search_prefers_unique_group_in_most_used_section(self):
         rows = [
             ("最常便用", 84, 83, 12, 11),
-            ("问渠安", 128, 129, 12, 12),
-            ("包含：裴怡淼〔企业：", 128, 205, 12, 11),
-            ("@问渠安全实验室", 177, 278, 23, 11),
-            ("企业：问渠安全实验室", 128, 301, 12, 11),
+            ("赤霄安", 128, 129, 12, 12),
+            ("包含：张小明〔企业：", 128, 205, 12, 11),
+            ("@赤霄安全实验室", 177, 278, 23, 11),
+            ("企业：赤霄安全实验室", 128, 301, 12, 11),
             ("搜索网络结果", 84, 340, 14, 10),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=221,
             render_h=815,
             expected_group=True,
@@ -358,16 +358,16 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_same_name_search_accepts_runtime_group_row_at_x_87(self):
         rows = [
             ("最常便用", 84, 83, 12, 11),
-            ("生@0问渠安全实验室", 87, 129, 32, 10),
-            ("裴怡淼0", 127, 181, 14, 12),
-            ("包含：裴怡淼〔企业：问渠安全实验室", 128, 206, 12, 11),
-            ("@问渠安全实验室", 177, 279, 23, 11),
-            ("企业：问渠安全实验室", 128, 302, 12, 11),
+            ("生@0赤霄安全实验室", 87, 129, 32, 10),
+            ("张小明0", 127, 181, 14, 12),
+            ("包含：张小明〔企业：赤霄安全实验室", 128, 206, 12, 11),
+            ("@赤霄安全实验室", 177, 279, 23, 11),
+            ("企业：赤霄安全实验室", 128, 302, 12, 11),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=300,
             render_h=815,
             expected_group=True,
@@ -378,17 +378,17 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_most_used_section_does_not_expand_to_distant_contains_marker(self):
         rows = [
             ("最常便用", 84, 83, 12, 11),
-            ("生@0问渠安全实验室", 87, 129, 32, 10),
-            ("裴怡淼", 128, 213, 14, 12),
-            ("@问渠安全实验室", 177, 215, 23, 11),
-            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("生@0赤霄安全实验室", 87, 129, 32, 10),
+            ("张小明", 128, 213, 14, 12),
+            ("@赤霄安全实验室", 177, 215, 23, 11),
+            ("企业：赤霄安全实验室", 128, 238, 12, 11),
             ("群聊", 84, 275, 11, 10),
-            ("包含：裴怡淼〔企业：问渠安全实验室", 128, 334, 12, 11),
+            ("包含：张小明〔企业：赤霄安全实验室", 128, 334, 12, 11),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=300,
             render_h=815,
             expected_group=True,
@@ -397,7 +397,7 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         self.assertEqual(selected, rows[1])
 
     def test_search_result_click_uses_text_area_not_avatar(self):
-        row = ("生@0问渠安全实验室", 87, 129, 32, 10)
+        row = ("生@0赤霄安全实验室", 87, 129, 32, 10)
 
         self.assertEqual(_search_result_click_point(row, 300), (165, 134))
 
@@ -420,15 +420,15 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
     def test_same_name_search_selects_non_group_contact(self):
         rows = [
-            ("@问渠安全实验室", 177, 215, 23, 11),
-            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("@赤霄安全实验室", 177, 215, 23, 11),
+            ("企业：赤霄安全实验室", 128, 238, 12, 11),
             ("群聊", 84, 275, 12, 11),
-            ("问渠安全实验室", 128, 321, 12, 12),
+            ("赤霄安全实验室", 128, 321, 12, 12),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=261,
             render_h=815,
             expected_group=False,

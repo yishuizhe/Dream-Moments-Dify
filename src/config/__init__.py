@@ -115,8 +115,62 @@ class ContextSettings:
     identity_aliases: List[str] = field(default_factory=list)
 
 @dataclass
+class QuietTimeSettings:
+    start: str = "22:00"
+    end: str = "08:00"
+
+@dataclass
+class ProactiveSettings:
+    """Optional unprompted messages inside the whitelist only."""
+
+    enabled: bool = False
+    private_enabled: bool = True
+    group_enabled: bool = True
+    min_minutes: float = 120.0
+    max_minutes: float = 300.0
+    poke_probability: float = 0.15
+    chat_targets: List[str] = field(default_factory=list)
+
+@dataclass
+class MemorySettings:
+    """Ebbinghaus-style decay for locally stored user memories."""
+
+    enabled: bool = True
+    max_items: int = 40
+    inject_items: int = 8
+    half_life_days: float = 14.0
+    min_strength: float = 0.12
+
+@dataclass
+class MemeSettings:
+    """Context-matched meme image replies."""
+
+    enabled: bool = True
+    probability: float = 0.35
+    cooldown_seconds: float = 300.0
+    max_per_hour: int = 6
+
+@dataclass
+class MomentsSettings:
+    """WeChat Moments browsing / interactions (publishing is experimental)."""
+
+    enabled: bool = False
+    browse_interval_minutes: float = 45.0
+    like_probability: float = 0.35
+    comment_probability: float = 0.12
+    publish_enabled: bool = False
+    publish_probability: float = 0.02
+    whitelist_only: bool = True
+    max_actions_per_run: int = 3
+
+@dataclass
 class BehaviorSettings:
     context: ContextSettings
+    quiet_time: QuietTimeSettings = field(default_factory=QuietTimeSettings)
+    proactive: ProactiveSettings = field(default_factory=ProactiveSettings)
+    memory: MemorySettings = field(default_factory=MemorySettings)
+    memes: MemeSettings = field(default_factory=MemeSettings)
+    moments: MomentsSettings = field(default_factory=MomentsSettings)
 
 @dataclass
 class AuthSettings:
@@ -383,6 +437,25 @@ class Config:
                 # 行为设置
                 behavior_data = categories.get('behavior_settings', {}).get('settings', {})
                 context_data = behavior_data.get('context', {})
+                quiet_data = behavior_data.get('quiet_time', {})
+                def _section(name: str) -> dict:
+                    raw = behavior_data.get(name, {})
+                    if not isinstance(raw, dict):
+                        return {}
+                    inner = raw.get('settings')
+                    return inner if isinstance(inner, dict) else raw
+
+                proactive_data = _section('proactive')
+                memory_data = _section('memory')
+                memes_data = _section('memes')
+                moments_data = _section('moments')
+
+                def _value(section: dict, key: str, default):
+                    entry = section.get(key)
+                    if not isinstance(entry, dict):
+                        return default
+                    return entry.get('value', default)
+
                 self.behavior = BehaviorSettings(
                     context=ContextSettings(
                         max_groups=int(context_data.get('max_groups', {}).get('value', 5)),
@@ -396,7 +469,69 @@ class Config:
                             for item in context_data.get('identity_aliases', {}).get('value', [])
                             if str(item).strip()
                         ],
-                    )
+                    ),
+                    quiet_time=QuietTimeSettings(
+                        start=str(_value(quiet_data, 'start', '22:00')).strip() or '22:00',
+                        end=str(_value(quiet_data, 'end', '08:00')).strip() or '08:00',
+                    ),
+                    proactive=ProactiveSettings(
+                        enabled=_as_bool(_value(proactive_data, 'enabled', False)),
+                        private_enabled=_as_bool(
+                            _value(proactive_data, 'private_enabled', True)
+                        ),
+                        group_enabled=_as_bool(
+                            _value(proactive_data, 'group_enabled', True)
+                        ),
+                        min_minutes=float(_value(proactive_data, 'min_minutes', 120.0)),
+                        max_minutes=float(_value(proactive_data, 'max_minutes', 300.0)),
+                        poke_probability=float(
+                            _value(proactive_data, 'poke_probability', 0.15)
+                        ),
+                        chat_targets=[
+                            str(item).strip()
+                            for item in _value(proactive_data, 'chat_targets', [])
+                            if str(item).strip()
+                        ],
+                    ),
+                    memory=MemorySettings(
+                        enabled=_as_bool(_value(memory_data, 'enabled', True), default=True),
+                        max_items=int(_value(memory_data, 'max_items', 40)),
+                        inject_items=int(_value(memory_data, 'inject_items', 8)),
+                        half_life_days=float(_value(memory_data, 'half_life_days', 14.0)),
+                        min_strength=float(_value(memory_data, 'min_strength', 0.12)),
+                    ),
+                    memes=MemeSettings(
+                        enabled=_as_bool(_value(memes_data, 'enabled', True), default=True),
+                        probability=float(_value(memes_data, 'probability', 0.35)),
+                        cooldown_seconds=float(
+                            _value(memes_data, 'cooldown_seconds', 300.0)
+                        ),
+                        max_per_hour=int(_value(memes_data, 'max_per_hour', 6)),
+                    ),
+                    moments=MomentsSettings(
+                        enabled=_as_bool(_value(moments_data, 'enabled', False)),
+                        browse_interval_minutes=float(
+                            _value(moments_data, 'browse_interval_minutes', 45.0)
+                        ),
+                        like_probability=float(
+                            _value(moments_data, 'like_probability', 0.35)
+                        ),
+                        comment_probability=float(
+                            _value(moments_data, 'comment_probability', 0.12)
+                        ),
+                        publish_enabled=_as_bool(
+                            _value(moments_data, 'publish_enabled', False)
+                        ),
+                        publish_probability=float(
+                            _value(moments_data, 'publish_probability', 0.02)
+                        ),
+                        whitelist_only=_as_bool(
+                            _value(moments_data, 'whitelist_only', True), default=True
+                        ),
+                        max_actions_per_run=int(
+                            _value(moments_data, 'max_actions_per_run', 3)
+                        ),
+                    ),
                 )
                 
                 # 认证设置

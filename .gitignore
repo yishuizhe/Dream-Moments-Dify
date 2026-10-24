@@ -206,6 +206,11 @@ data/images/temp/
 data/voices/
 data/operit_sessions.json
 data/operit_sessions.json.tmp
+data/proactive_state.json
+data/proactive_state.json.tmp
+data/moments_state.json
+data/moments_state.json.tmp
+data/moments_drafts/
 .android-tools/
 android/**/.gradle/
 android/**/build/
