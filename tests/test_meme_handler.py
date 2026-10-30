@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from PIL import Image
 from pathlib import Path
 
@@ -52,8 +53,12 @@ class MemeHandlerTests(unittest.TestCase):
 
     def test_cooldown_blocks_second_send(self):
         self.handler.cooldown_seconds = 600
-        self.assertIsNotNone(self.handler.pick("封号了", chat_id="c3"))
-        self.assertIsNone(self.handler.pick("封号了", chat_id="c3"))
+        # Windows runners may have booted less than one cooldown ago.
+        # A missing previous send is not a timestamp of zero.
+        with patch('handlers.meme.time.monotonic', return_value=5):
+            self.assertIsNotNone(self.handler.pick("封号了", chat_id="c3"))
+        with patch('handlers.meme.time.monotonic', return_value=10):
+            self.assertIsNone(self.handler.pick("封号了", chat_id="c3"))
 
     def test_character_name_alone_never_selects_a_picture(self):
         self.assertIsNone(self.handler.pick("Claude 大肥鱼", chat_id="c"))

@@ -9,6 +9,7 @@
 - Treat type-62 poke notices and system events as events, never as a new human speaker. Filter historical poke notices and previous generated summaries from summary evidence; resolve member names against the current group's directory.
 - Use stable chat IDs for plugin/device replies and verify the actual chat header before native sends. A voice-input tooltip cannot invalidate the target title.
 - Match meme images to the reply, reject unusable images and negated emotion matches, and keep picture repetition history per chat. Remove random emotion-GIF injection after ordinary replies.
+- Allow the first meme after a fresh Windows boot; a missing send timestamp must not be mistaken for an active cooldown.
 - Bundle the generic Claude persona; publish no personal configuration, conversation databases, live replay scripts/results, runtime state or private Android APKs. Proactive messaging, Moments and optional group participation remain disabled in public defaults.
 - Validation: 256 public-tree regression tests (the local-only external GroupFun suite is excluded). Five historical dialogue replays and native WeChat 4.1.12.55 text-send readback were checked locally; private evidence is not distributed. Other WeChat versions and experimental Moments publishing are not certified by these checks.
 

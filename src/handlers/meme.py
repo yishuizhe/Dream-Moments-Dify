@@ -140,7 +140,8 @@ class MemeHandler:
         key = str(chat_id or "")
         if not key:
             return False
-        if now - self._last_sent_at.get(key, 0.0) < self.cooldown_seconds:
+        last_sent = self._last_sent_at.get(key)
+        if last_sent is not None and now - last_sent < self.cooldown_seconds:
             return True
         history = self._sent_history.setdefault(key, deque(maxlen=self.max_per_hour * 4))
         while history and now - history[0] > 3600:
