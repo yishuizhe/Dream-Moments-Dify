@@ -3,12 +3,21 @@ from datetime import datetime
 import threading
 import time
 import os
-from services.database import HistoryStore, Session, ChatMessage, make_identity_key, resolve_identity
+from services.database import (
+    HistoryStore,
+    Session,
+    ChatMessage,
+    make_identity_key,
+    person_key_for,
+    resolve_identity,
+)
 from config import config
 from wechat.adapter import WxAuto4PollingAdapter
+from wechat.message_types import is_poke_notice
 import re
 from handlers.emoji import EmojiHandler
 from handlers.image import ImageHandler
+from handlers.meme import MemeHandler
 from handlers.message import MessageHandler
 from handlers.voice import VoiceHandler
 from handlers.image_recognition import (
@@ -21,6 +30,10 @@ from handlers.image_recognition import (
 from plugins.manager import PluginManager
 from services.operit import OperitBridge, OperitClient, OperitSessionStore
 from services.nana_phone import NanaPhoneClient, format_nana_phone_result
+from services.proactive import ProactiveService
+from services.group_participation import GroupParticipation, GroupPolicySettings
+from services.dialogue_memory import DialogueMemory
+from services.moments import MomentsService
 from services.ai.moonshot import MoonShotAI
 from utils.cleanup import cleanup_pycache, CleanupUtils
 from utils.logger import LoggerConfig
@@ -132,6 +145,7 @@ class ChatBot:
         plugin_manager=None,
         history_store=None,
         operit_bridge=None,
+        dialogue_memory=None,
     ):
         self.message_handler = message_handler
         self.moonshot_ai = moonshot_ai
@@ -149,7 +163,49 @@ class ChatBot:
         )
         self.history_store = history_store or HistoryStore()
         self.operit_bridge = operit_bridge
+        self.dialogue_memory = dialogue_memory or DialogueMemory(
+            os.path.join(root_dir, "data", "dialogue_progress.json"))
+        self.message_handler.dialogue_memory = self.dialogue_memory
+        self.group_participation = GroupParticipation(GroupPolicySettings.load(
+            os.path.join(root_dir, "data", "group_participation.json")
+        ))
+        self.message_handler.group_participation = self.group_participation
         logger.info(f"机器人名称: {self.robot_name}")
+
+    def _consider_group_participation(self, chat_id, reply_target, sender_id,
+                                      sender_name, content, *, explicit=False, reply_to_other=False):
+        candidate = self.group_participation.observe(
+            chat_id, sender_id, sender_name, content, explicit=explicit,
+            reply_to_other=reply_to_other,
+        )
+        if candidate is None:
+            return
+        decide_name = ("decide_group_followup" if candidate.get("mode") == "followup"
+                       else "decide_group_participation")
+        decide = getattr(self.message_handler, decide_name, None)
+        if not callable(decide):
+            return
+
+        def act(action):
+            if action == "repeat":
+                # Repeat exactly once, as one bubble, without rewriting via AI.
+                self.wx.send_text(reply_target, candidate["text"])
+                self.message_handler._record_assistant_reply(chat_id, candidate["text"], True, kind="repeat")
+                return
+            key = f"ambient:{chat_id}:{time.time_ns()}"
+            with self.message_handler.queue_lock:
+                self.message_handler.user_queues[key] = {
+                    "messages": [{"content": str(content), "sender_name": sender_name,
+                                  "sender_id": sender_id, "timestamp": datetime.now(),
+                                  "is_group": True}],
+                    "is_group": True, "chat_id": chat_id, "reply_target": reply_target,
+                    "ambient_generation": candidate["generation"],
+                    "ambient_expires": time.monotonic() + 25.0,
+                    "conversation_mode": candidate.get("mode", "ambient"),
+                }
+            self.message_handler.process_messages(key)
+
+        self.group_participation.submit(chat_id, candidate, decide, act)
 
     def _send_operit_reply(
         self,
@@ -163,7 +219,7 @@ class ChatBot:
         reply = str(text or "").strip()
         if not reply:
             return
-        self.wx.send_text(chat_name, reply)
+        self.wx.send_text(history_chat_id or chat_name, reply)
         self.history_store.record_message(
             chat_id=history_chat_id or chat_name,
             sender_id=self.robot_name or "bot",
@@ -206,13 +262,17 @@ class ChatBot:
                 f"对方曾让我用我自己的手机处理“{str(command).strip()}”；"
                 f"我处理后的结果是“{str(reply).strip()}”。"
             )
-            self.history_store.remember_user_message(
-                identity_key=identity_key,
-                chat_id=history_chat_id or chat_name,
-                sender_id=sender_id,
-                sender_name=sender_name,
-                content=memory,
-            )
+            if config.behavior.memory.enabled:
+                self.history_store.remember_user_message(
+                    identity_key=identity_key,
+                    chat_id=history_chat_id or chat_name,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    content=memory,
+                    max_items=config.behavior.memory.max_items,
+                    half_life_days=config.behavior.memory.half_life_days,
+                    min_strength=config.behavior.memory.min_strength,
+                )
         else:
             logger.info("未把失败或无数据的手机结果写入长期记忆")
         return reply
@@ -293,6 +353,14 @@ class ChatBot:
         try:
             username = msg.sender
             content = getattr(msg, 'content', None) or getattr(msg, 'text', None)
+            raw = getattr(msg, "raw", None) or msg
+            if (bool(getattr(msg, "is_self", False))
+                    or getattr(raw, "attr", "") in {"system", "self"}
+                    or str(getattr(msg, "type", "")) in {"system", "notice", "系统消息", "时间"}
+                    or is_poke_notice(str(content or ""))):
+                # Poke notices describe two people, not a new human speaker.
+                # Never turn them into dialogue, personal memory or repeats.
+                return
             stable_chat_id = str(getattr(msg, "chat_id", "") or chatName)
             configured_name = str(getattr(msg, "configured_name", "") or chatName)
             register_identity = getattr(self.history_store, "register_chat_identity", None)
@@ -331,13 +399,36 @@ class ChatBot:
                 is_group,
                 config.behavior.context.identity_aliases,
             )
-            self.history_store.remember_user_message(
-                identity_key=identity_key,
-                chat_id=stable_chat_id,
-                sender_id=sender_id,
-                sender_name=username,
-                content=content,
+            if is_group:
+                identity_key = make_identity_key(stable_chat_id, sender_id, True)
+            # Keep the global person directory for recognition; group memories
+            # are written and recalled under this group's member key only.
+            memory_key = person_key_for(
+                sender_id,
+                username,
+                config.behavior.context.identity_aliases,
             )
+            register_person = getattr(self.history_store, "register_person", None)
+            if callable(register_person):
+                register_person(
+                    memory_key,
+                    username,
+                    chat_id=stable_chat_id,
+                    chat_name=chatName,
+                    is_group=bool(is_group),
+                    aliases=[username, configured_name],
+                )
+            if config.behavior.memory.enabled:
+                self.history_store.remember_user_message(
+                    identity_key=identity_key if is_group else memory_key,
+                    chat_id=stable_chat_id,
+                    sender_id=sender_id,
+                    sender_name=username,
+                    content=content,
+                    max_items=config.behavior.memory.max_items,
+                    half_life_days=config.behavior.memory.half_life_days,
+                    min_strength=config.behavior.memory.min_strength,
+                )
 
             # Explicit phone-control commands bypass the ordinary chat model.
             # Operit runs in a daemon worker so a long phone task cannot stop
@@ -358,7 +449,7 @@ class ChatBot:
                     chat_name=chatName,
                     sender_id=sender_id,
                     sender_name=username,
-                    identity_key=identity_key,
+                    identity_key=identity_key if is_group else memory_key,
                     is_group=bool(is_group),
                     command=command,
                     raw_result=raw_result,
@@ -396,7 +487,8 @@ class ChatBot:
                     # Plugin cards/rankings are intentionally one WeChat
                     # message. Splitting them makes titles and rows arrive as
                     # unrelated bubbles.
-                    self.wx.send_text(chatName, str(plugin_reply).strip())
+                    self.wx.send_text(stable_chat_id, str(plugin_reply).strip())
+                    self.group_participation.note_bot_reply(stable_chat_id, plugin_reply, sender_id=sender_id)
                     self.history_store.record_message(
                         chat_id=stable_chat_id,
                         sender_id=self.robot_name or "bot",
@@ -421,13 +513,25 @@ class ChatBot:
                 quote_matches_recent_reply = bool(
                     quoted_content
                     and callable(recent_text_checker)
-                    and recent_text_checker(chatName, quoted_content)
+                    and (recent_text_checker(stable_chat_id, quoted_content)
+                         or recent_text_checker(chatName, quoted_content))
                 )
                 is_reply_to_bot = bool(
                     getattr(msg, 'is_quote', False)
                     and (quoted_sender == self.robot_name or quote_matches_recent_reply)
                 )
+                quoted_id = str(getattr(msg, 'quoted_sender_id', '') or '')
+                my_id_getter = getattr(self.wx, 'get_my_id', None)
+                if quoted_id and callable(my_id_getter):
+                    my_id = my_id_getter()
+                    if isinstance(my_id, str) and my_id:
+                        is_reply_to_bot = quoted_id == my_id
                 cleaned, mentioned = strip_group_bot_mention(original_content, self.robot_name)
+                if not mentioned and str(self.robot_name).casefold() == "claude":
+                    for alias in ("克劳德", "大小姐", "小克"):
+                        cleaned, mentioned = strip_group_bot_mention(original_content, alias)
+                        if mentioned:
+                            break
                 if mentioned:
                     mention_triggered = True
                     content = cleaned
@@ -439,8 +543,17 @@ class ChatBot:
                     content = original_content.strip()
                     visual_requested = True
                 else:
-                    logger.info("群聊消息未显式触发机器人，已跳过")
+                    if not visual_message:
+                        self._consider_group_participation(
+                            stable_chat_id, stable_chat_id, sender_id, username, original_content,
+                            reply_to_other=bool(getattr(msg, 'is_quote', False)),
+                        )
                     return
+
+                self._consider_group_participation(
+                    stable_chat_id, stable_chat_id, sender_id, username,
+                    original_content, explicit=True,
+                )
 
                 if mention_triggered and visual_message:
                     visual_requested = is_explicit_image_request(original_content)
@@ -517,6 +630,8 @@ class ChatBot:
                 "sender_id": sender_id,
                 "timestamp": received_at,
                 "is_group": bool(is_group),
+                "quoted_sender": str(getattr(msg, "quoted_sender", "") or ""),
+                "quoted_content": str(getattr(msg, "quoted_content", "") or ""),
             }
             with self.queue_lock:
                 if queue_key not in self.user_queues:
@@ -526,7 +641,7 @@ class ChatBot:
                         "message_items": [queue_item],
                         "is_group": bool(is_group),
                         "chat_id": str(stable_chat_id),
-                        "reply_target": str(chatName),
+                        "reply_target": str(stable_chat_id),
                         "sender_name": sender_name,
                         "username": str(sender_id),
                     }
@@ -538,7 +653,7 @@ class ChatBot:
                     queue.setdefault("message_items", []).append(queue_item)
                     queue["is_group"] = bool(is_group)
                     queue["chat_id"] = str(stable_chat_id)
-                    queue["reply_target"] = str(chatName)
+                    queue["reply_target"] = str(stable_chat_id)
                     queue["sender_name"] = sender_name
                     queue["username"] = str(sender_id)
                     queue["timer"] = threading.Timer(5.0, self.process_user_messages, args=[queue_key])
@@ -568,6 +683,15 @@ ROBOT_WX_NAME = ""
 
 # Services that do not require a logged-in WeChat client.
 emoji_handler = EmojiHandler(root_dir)
+meme_handler = None
+if config.behavior.memes.enabled:
+    meme_handler = MemeHandler(
+        root_dir,
+        config.behavior.context.avatar_dir,
+        cooldown_seconds=config.behavior.memes.cooldown_seconds,
+        max_per_hour=config.behavior.memes.max_per_hour,
+        probability=config.behavior.memes.probability,
+    )
 image_handler = ImageHandler(
     root_dir=root_dir,
     api_key=config.llm.api_key,
@@ -598,6 +722,8 @@ else:
 history_store = HistoryStore()
 message_handler = None
 chat_bot = None
+proactive_service = None
+moments_service = None
 _daily_briefing_date = None
 
 
@@ -611,16 +737,15 @@ def seed_known_group_chats() -> None:
             continue
         if any(bool(item.get("is_group")) for item in recent):
             known_group_chats.add(str(name))
-    for name in ("我们都在用力的活着", "熬夜会猝", "牛马小家庭", "问渠安全实验室"):
-        if name in listen_list:
-            known_group_chats.add(name)
+    # Group identities are also restored from the local identity table below;
+    # no private group names are hard-coded here.
     if known_group_chats:
         logger.info("已预热群聊识别: %s", "、".join(sorted(known_group_chats)))
 
 def build_runtime() -> None:
     """Build services that depend on a logged-in WeChat client."""
 
-    global ROBOT_WX_NAME, message_handler, chat_bot
+    global ROBOT_WX_NAME, message_handler, chat_bot, proactive_service, moments_service
     ROBOT_WX_NAME = wechat_adapter.get_my_name()
     if not ROBOT_WX_NAME:
         ROBOT_WX_NAME = os.environ.get("DREAM_ROBOT_NAME", "").strip()
@@ -644,10 +769,18 @@ def build_runtime() -> None:
         prompt_content=prompt_content,
         image_handler=image_handler,
         emoji_handler=emoji_handler,
+        meme_handler=meme_handler,
         voice_handler=voice_handler,
         wechat=wechat_adapter,
         history_store=history_store,
         identity_aliases=config.behavior.context.identity_aliases,
+        memory_settings={
+            "enabled": config.behavior.memory.enabled,
+            "max_items": config.behavior.memory.max_items,
+            "inject_items": config.behavior.memory.inject_items,
+            "half_life_days": config.behavior.memory.half_life_days,
+            "min_strength": config.behavior.memory.min_strength,
+        },
         fallback_routes=[
             {
                 "name": route.name,
@@ -665,6 +798,7 @@ def build_runtime() -> None:
     plugin_manager.configure_services(
         history_store=history_store,
         ai_responder=message_handler.generate_summary_response,
+        member_directory=wechat_adapter.get_group_members,
     )
     operit_bridge = None
     try:
@@ -715,6 +849,26 @@ def build_runtime() -> None:
         plugin_manager=plugin_manager,
         history_store=history_store,
         operit_bridge=operit_bridge,
+    )
+    proactive_service = ProactiveService(
+        wechat=wechat_adapter,
+        message_handler=message_handler,
+        history_store=history_store,
+        settings=config.behavior.proactive,
+        quiet_time=config.behavior.quiet_time,
+        state_path=os.path.join(root_dir, "data", "proactive_state.json"),
+        is_group=is_group_target,
+        logger_=logger,
+    )
+    moments_service = MomentsService(
+        wechat=wechat_adapter,
+        message_handler=message_handler,
+        history_store=history_store,
+        settings=config.behavior.moments,
+        state_path=os.path.join(root_dir, "data", "moments_state.json"),
+        contacts=list(listen_list),
+        quiet_time=config.behavior.quiet_time,
+        logger_=logger,
     )
     seed_known_group_chats()
     try:
@@ -898,6 +1052,18 @@ def main():
         listener_thread = threading.Thread(target=message_listener, daemon=True)
         listener_thread.start()
         threading.Thread(target=daily_briefing_loop, args=(briefing_stop,), daemon=True).start()
+        if proactive_service is not None:
+            threading.Thread(
+                target=proactive_service.run,
+                args=(briefing_stop,),
+                daemon=True,
+            ).start()
+        if moments_service is not None:
+            threading.Thread(
+                target=moments_service.run,
+                args=(briefing_stop,),
+                daemon=True,
+            ).start()
         print_status("机器人已启动，正在等待新消息", "success", "✅")
 
         # 主循环

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from services import memory_curve
+from wechat.message_types import conversation_text
 
 Base = declarative_base()
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -70,6 +72,24 @@ class ChatIdentity(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
 
+class PersonIdentity(Base):
+    """One real person across private chats, groups and Moments.
+
+    The WeChat ``wxid`` is the canonical id when it is available. Display
+    names, group nicknames and the chats where this person was seen are kept
+    as aliases so the model can recognise the same person everywhere.
+    """
+
+    __tablename__ = "people"
+
+    person_id = Column(String(255), primary_key=True)
+    display_name = Column(String(255), nullable=False, default="")
+    aliases_json = Column(Text, nullable=False, default="[]")
+    chats_json = Column(Text, nullable=False, default="[]")
+    first_seen = Column(DateTime, nullable=False, default=datetime.now)
+    last_seen = Column(DateTime, nullable=False, default=datetime.now)
+
+
 Base.metadata.create_all(engine)
 
 
@@ -119,6 +139,40 @@ def resolve_identity(
 
 def _normalize_identity_token(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def person_key_for(
+    sender_id: str,
+    sender_name: str = "",
+    identity_aliases: list[str] | None = None,
+) -> str:
+    """Return one stable memory key for a human across all conversations.
+
+    The WeChat ``wxid`` wins whenever it is known; display names are only a
+    fallback for the older UI-automation backend. Explicit ``本人=...`` alias
+    rules still collapse several display names onto one canonical person.
+    """
+
+    stable_id = str(sender_id or "").strip()
+    name = str(sender_name or "").strip()
+    observed = {_normalize_identity_token(value) for value in (stable_id, name)}
+    observed.discard("")
+    for rule in identity_aliases or []:
+        if "=" not in str(rule):
+            continue
+        canonical, raw_aliases = str(rule).split("=", 1)
+        canonical = canonical.strip()
+        if not canonical:
+            continue
+        aliases = {_normalize_identity_token(value) for value in [canonical, *re.split(r"[|;=]", raw_aliases)] if value.strip()}
+        if observed & aliases:
+            return f"person:{canonical}"
+    if stable_id.startswith("wxid_"):
+        return f"person:{stable_id}"
+    # Non-wxid ids such as a manually bound contact id still beat a nickname.
+    if stable_id and not stable_id.isdigit() and stable_id != name:
+        return f"person:{stable_id}"
+    return f"person:{stable_id or name or 'unknown'}"
 
 
 class HistoryStore:
@@ -299,6 +353,8 @@ class HistoryStore:
         limit: int = 100,
         *,
         member_name: str = "",
+        member_id: str = "",
+        member_ids: list[str] | None = None,
         since: datetime | None = None,
         exclude_assistant: bool = False,
     ) -> list[dict]:
@@ -313,6 +369,12 @@ class HistoryStore:
             )
             if since is not None:
                 query = query.filter(ConversationMessage.created_at >= since)
+            identities = list(member_ids or ([member_id] if member_id else []))
+            if identities:
+                query = query.filter(
+                    ConversationMessage.sender_id.in_(identities),
+                    ConversationMessage.role != "assistant",
+                )
             rows = query.order_by(ConversationMessage.id.desc()).limit(fetch_n).all()
             rows.reverse()
             target = self._normalize_person_name(member_name)
@@ -323,7 +385,7 @@ class HistoryStore:
                     continue
                 sender_name = str(row.sender_name or "")
                 sender_id = str(row.sender_id or "")
-                if target:
+                if target and not identities:
                     if not self._person_name_matches(target, sender_name, sender_id):
                         continue
                     if role == "assistant":
@@ -351,6 +413,21 @@ class HistoryStore:
         for ch in (" ", "\t", "\u3000", ":", "：", ",", "，", "。", "!", "！", "?", "？"):
             text = text.replace(ch, "")
         return text.lower()
+
+    def get_summary_members(self, chat_id: str) -> list[dict]:
+        """All observed aliases in this chat, without reading message bodies."""
+        session = self.session_factory()
+        try:
+            rows = session.query(
+                ConversationMessage.sender_id, ConversationMessage.sender_name,
+            ).filter(
+                ConversationMessage.chat_id == str(chat_id),
+                ConversationMessage.role != "assistant",
+            ).distinct().all()
+            return [{"username": sender_id, "sender_name": name}
+                    for sender_id, name in rows if sender_id]
+        finally:
+            session.close()
 
     @classmethod
     def _person_name_matches(cls, target: str, sender_name: str, sender_id: str = "") -> bool:
@@ -418,7 +495,7 @@ class HistoryStore:
         for row in rows:
             role = str(row.get("role") or "user")
             name = str(row.get("sender_name") or row.get("sender_id") or "未知")
-            content = str(row.get("content") or "").strip()
+            content = conversation_text(str(row.get("content") or ""))
             if not content:
                 continue
             ts = row.get("created_at")
@@ -434,10 +511,7 @@ class HistoryStore:
                 prefix = f"[{stamp}|{age}] "
             else:
                 prefix = ""
-            if role == "assistant":
-                lines.append(f"{prefix}娜娜：{content}")
-            else:
-                lines.append(f"{prefix}{name}：{content}")
+            lines.append(f"{prefix}{name}：{content}")
         return "\n".join(lines[-max(1, int(limit)) :])
 
 
@@ -449,19 +523,34 @@ class HistoryStore:
         sender_id: str,
         sender_name: str,
         content: str,
-        max_items: int = 12,
+        max_items: int = 40,
+        half_life_days: float = 14.0,
+        min_strength: float = 0.12,
     ) -> None:
         text = " ".join(str(content or "").split()).strip()
         if not self._is_memory_candidate(text):
             return
         text = text[:300]
+        now = datetime.now()
         session = self.session_factory()
         try:
             row = session.query(UserMemory).filter(UserMemory.identity_key == identity_key).one_or_none()
-            items = self._decode_memory(row.memory_text if row else "[]")
-            items = [item for item in items if item != text]
-            items.append(text)
-            items = items[-max(1, int(max_items)):]
+            entries = self._decode_entries(row.memory_text if row else "[]")
+            merged = False
+            for entry in entries:
+                if entry["text"] == text:
+                    memory_curve.reinforce(entry, now)
+                    merged = True
+                    break
+            if not merged:
+                entries.append(memory_curve.new_entry(text, now))
+            entries = memory_curve.prune(
+                entries,
+                now,
+                half_life_days=half_life_days,
+                min_strength=min_strength,
+                max_items=max_items,
+            )
             if row is None:
                 row = UserMemory(
                     identity_key=identity_key,
@@ -473,31 +562,150 @@ class HistoryStore:
             row.chat_id = str(chat_id or "")
             row.sender_id = str(sender_id or "")
             row.sender_name = str(sender_name or sender_id or "")
-            row.memory_text = json.dumps(items, ensure_ascii=False)
-            row.updated_at = datetime.now()
+            row.memory_text = json.dumps(entries, ensure_ascii=False)
+            row.updated_at = now
             session.commit()
         finally:
             session.close()
 
-    def get_memory_items(self, identity_key: str) -> list[str]:
+    # ------------------------------------------------------------------
+    # People: one identity across private chats, groups and Moments
+    # ------------------------------------------------------------------
+    def register_person(
+        self,
+        person_id: str,
+        display_name: str = "",
+        *,
+        chat_id: str = "",
+        chat_name: str = "",
+        is_group: bool = False,
+        aliases: list[str] | None = None,
+    ) -> str:
+        person_id = str(person_id or "").strip()
+        if not person_id:
+            return ""
+        now = datetime.now()
+        session = self.session_factory()
+        try:
+            row = session.query(PersonIdentity).filter(PersonIdentity.person_id == person_id).one_or_none()
+            if row is None:
+                row = PersonIdentity(
+                    person_id=person_id,
+                    display_name=str(display_name or "").strip(),
+                    first_seen=now,
+                )
+                session.add(row)
+            if str(display_name or "").strip():
+                row.display_name = str(display_name).strip()
+            known_aliases = self._load_json_list(row.aliases_json)
+            for value in [display_name, *(aliases or [])]:
+                value = str(value or "").strip()
+                if value and value not in known_aliases:
+                    known_aliases.append(value)
+            row.aliases_json = json.dumps(known_aliases[-20:], ensure_ascii=False)
+            if chat_id:
+                chats = self._load_json_list(row.chats_json, expect_dicts=True)
+                label = str(chat_name or chat_id)
+                for item in chats:
+                    if str(item.get("chat_id") or "") == str(chat_id):
+                        item["last_seen"] = now.isoformat(timespec="seconds")
+                        item["chat_name"] = label
+                        item["is_group"] = bool(is_group)
+                        break
+                else:
+                    chats.append({
+                        "chat_id": str(chat_id),
+                        "chat_name": label,
+                        "is_group": bool(is_group),
+                        "last_seen": now.isoformat(timespec="seconds"),
+                    })
+                row.chats_json = json.dumps(chats[-20:], ensure_ascii=False)
+            row.last_seen = now
+            session.commit()
+            return person_id
+        finally:
+            session.close()
+
+    def get_person_profile(self, person_id: str) -> dict | None:
+        person_id = str(person_id or "").strip()
+        if not person_id:
+            return None
+        session = self.session_factory()
+        try:
+            row = session.query(PersonIdentity).filter(PersonIdentity.person_id == person_id).one_or_none()
+            if row is None:
+                return None
+            return {
+                "person_id": row.person_id,
+                "display_name": row.display_name,
+                "aliases": self._load_json_list(row.aliases_json),
+                "chats": self._load_json_list(row.chats_json, expect_dicts=True),
+                "first_seen": row.first_seen,
+                "last_seen": row.last_seen,
+            }
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------------
+    # Memory reads (Ebbinghaus decay + spacing reinforcement)
+    # ------------------------------------------------------------------
+    def get_memory_items(
+        self,
+        identity_key: str,
+        limit: int = 8,
+        *,
+        half_life_days: float = 14.0,
+        min_strength: float = 0.12,
+        touch: bool = True,
+    ) -> list[str]:
         session = self.session_factory()
         try:
             row = session.query(UserMemory).filter(UserMemory.identity_key == identity_key).one_or_none()
-            return self._decode_memory(row.memory_text if row else "[]")
+            if row is None:
+                return []
+            all_entries = self._decode_entries(row.memory_text)
+            entries = memory_curve.rank(
+                all_entries,
+                half_life_days=half_life_days,
+                min_strength=min_strength,
+                limit=limit,
+            )
+            if touch and entries:
+                selected = {entry["text"] for entry in entries}
+                for entry in all_entries:
+                    if entry["text"] in selected:
+                        memory_curve.reinforce(entry)
+                row.memory_text = json.dumps(all_entries, ensure_ascii=False)
+                row.updated_at = datetime.now()
+                session.commit()
+            return [entry["text"] for entry in entries]
         finally:
             session.close()
 
     def get_memory_items_for_aliases(
-        self, identity_key: str, identity_aliases: list[str] | None = None
+        self,
+        identity_key: str,
+        identity_aliases: list[str] | None = None,
+        limit: int = 8,
+        *,
+        half_life_days: float = 14.0,
+        min_strength: float = 0.12,
+        touch: bool = True,
     ) -> list[str]:
-        """Read the unified memory plus matching pre-alias local memories."""
+        """Read merged memories for an identity and its configured aliases."""
 
         aliases = {
             _normalize_identity_token(value) for value in (identity_aliases or [])
         }
         aliases.discard("")
         if not aliases:
-            return self.get_memory_items(identity_key)
+            return self.get_memory_items(
+                identity_key,
+                limit,
+                half_life_days=half_life_days,
+                min_strength=min_strength,
+                touch=touch,
+            )
         session = self.session_factory()
         try:
             rows = session.query(UserMemory).all()
@@ -509,16 +717,85 @@ class HistoryStore:
                 }
                 if row.identity_key == identity_key or aliases & row_tokens:
                     matched.append(row)
-            matched.sort(key=lambda row: row.updated_at or datetime.min)
-            items: list[str] = []
-            for row in matched:
-                for item in self._decode_memory(row.memory_text):
-                    if item in items:
-                        items.remove(item)
-                    items.append(item)
-            return items[-12:]
+            return self._rank_rows(matched, limit, half_life_days, min_strength, touch, session)
         finally:
             session.close()
+
+    def get_memory_items_for_person(
+        self,
+        person_key: str,
+        *,
+        sender_id: str = "",
+        sender_name: str = "",
+        identity_aliases: list[str] | None = None,
+        limit: int = 8,
+        half_life_days: float = 14.0,
+        min_strength: float = 0.12,
+        touch: bool = True,
+    ) -> list[str]:
+        """Merge the person's memory even if legacy rows used old chat keys."""
+
+        aliases = {_normalize_identity_token(value) for value in (identity_aliases or [])}
+        aliases.discard("")
+        wanted_sender = str(sender_id or "").strip()
+        wanted_name = _normalize_identity_token(sender_name)
+        session = self.session_factory()
+        try:
+            rows = session.query(UserMemory).all()
+            matched = []
+            for row in rows:
+                row_tokens = {
+                    _normalize_identity_token(row.sender_id),
+                    _normalize_identity_token(row.sender_name),
+                }
+                if row.identity_key == person_key:
+                    matched.append(row)
+                elif wanted_sender and str(row.sender_id or "") == wanted_sender:
+                    matched.append(row)
+                elif aliases & row_tokens:
+                    matched.append(row)
+                elif not wanted_sender and wanted_name and wanted_name in row_tokens:
+                    matched.append(row)
+            return self._rank_rows(matched, limit, half_life_days, min_strength, touch, session)
+        finally:
+            session.close()
+
+    def _rank_rows(
+        self,
+        rows: list[UserMemory],
+        limit: int,
+        half_life_days: float,
+        min_strength: float,
+        touch: bool,
+        session,
+    ) -> list[str]:
+        merged: dict[str, dict] = {}
+        for row in rows:
+            for entry in self._decode_entries(row.memory_text):
+                previous = merged.get(entry["text"])
+                if previous is None or float(entry.get("importance") or 0) > float(previous.get("importance") or 0):
+                    merged[entry["text"]] = entry
+        ranked = memory_curve.rank(
+            list(merged.values()),
+            half_life_days=half_life_days,
+            min_strength=min_strength,
+            limit=limit,
+        )
+        if touch and ranked and rows:
+            now = datetime.now()
+            selected = {entry["text"] for entry in ranked}
+            for row in rows:
+                entries = self._decode_entries(row.memory_text)
+                changed = False
+                for entry in entries:
+                    if entry["text"] in selected:
+                        memory_curve.reinforce(entry, now)
+                        changed = True
+                if changed:
+                    row.memory_text = json.dumps(entries, ensure_ascii=False)
+                    row.updated_at = now
+            session.commit()
+        return [entry["text"] for entry in ranked]
 
     def clear_memory(self, identity_key: str) -> bool:
         session = self.session_factory()
@@ -529,15 +806,55 @@ class HistoryStore:
         finally:
             session.close()
 
+    def clear_person_memory(self, person_key: str, sender_id: str = "") -> bool:
+        session = self.session_factory()
+        try:
+            query = session.query(UserMemory)
+            rows = [
+                row for row in query.all()
+                if row.identity_key == person_key
+                or (sender_id and str(row.sender_id or "") == str(sender_id))
+            ]
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return bool(rows)
+        finally:
+            session.close()
+
     @staticmethod
-    def _decode_memory(value: str) -> list[str]:
+    def _decode_entries(value: str) -> list[dict]:
         try:
             data = json.loads(value or "[]")
         except (TypeError, ValueError):
             return []
         if not isinstance(data, list):
             return []
-        return [str(item).strip() for item in data if str(item).strip()]
+        entries = []
+        for item in data:
+            entry = memory_curve.normalize_entry(item)
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+    @staticmethod
+    def _decode_memory(value: str) -> list[str]:
+        return [
+            entry["text"]
+            for entry in HistoryStore._decode_entries(value)
+        ]
+
+    @staticmethod
+    def _load_json_list(value: str, *, expect_dicts: bool = False) -> list:
+        try:
+            data = json.loads(value or "[]")
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(data, list):
+            return []
+        if expect_dicts:
+            return [item for item in data if isinstance(item, dict)]
+        return [str(item) for item in data if str(item).strip()]
 
     @staticmethod
     def _is_memory_candidate(text: str) -> bool:

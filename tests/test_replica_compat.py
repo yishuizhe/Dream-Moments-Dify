@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from wechat.replica_compat import (
+    _room_member_display_names,
     ReplicaWeChatClient,
     _merge_search_ocr_rows,
     _ocr_name_similarity,
@@ -19,10 +20,18 @@ from wechat.replica_compat import (
     _select_search_result,
     _search_ocr_name_matches,
     _title_ocr_name_matches,
+    _uia_chat_title,
 )
 
 
 class ReplicaCompatibilityTests(unittest.TestCase):
+    def test_group_nicknames_are_read_from_room_specific_protobuf(self):
+        member = b"\x0a\x06wxid_a\x12\x06" + "群名".encode("utf-8") + b"\x18\x01"
+        blob = b"\x0a" + bytes([len(member)]) + member
+        self.assertEqual(_room_member_display_names(blob), {"wxid_a": "群名"})
+        self.assertEqual(_room_member_display_names(blob[:-1]), {})
+        self.assertEqual(_room_member_display_names(b"\x0a\xff"), {})
+
     def setUp(self):
         # Unit tests must not consume the real account's persisted write budget.
         gate = patch("wechatauto.rhythm.gate")
@@ -39,6 +48,54 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         with patch("wechatauto.WeChatDB", return_value=db):
             client = ReplicaWeChatClient()
         return client, db
+
+    def test_poke_appmsg_does_not_reuse_another_groups_contact_as_human(self):
+        client, db = self.make_client()
+        client._current_username = 'target@chatroom'
+        client._current_name = '本群'
+        db.get_nickname.return_value = '外群成员甲'
+        message = client._convert_message({
+            'sender_id': 17, 'sender_username': 'wxid_other_group', 'type': '应用消息',
+            'content': '<msg><appmsg><title>"A" 拍了拍 "B"</title><type>62</type></appmsg></msg>',
+        })
+        self.assertEqual(message.attr, 'system')
+
+    def test_group_poke_never_selects_a_random_members_avatar(self):
+        client, db = self.make_client()
+        client._name_to_username['测试群'] = 'g@chatroom'
+        client._uia_sender = MagicMock()
+        self.assertFalse(client.Poke('测试群'))
+        client._uia_sender.open_chat.assert_not_called()
+
+    def test_same_title_different_group_ids_abort_before_ui(self):
+        client, db = self.make_client()
+        db.get_sessions.return_value = [{'username': 'g1@chatroom'}, {'username': 'g2@chatroom'}]
+        db.get_nickname.return_value = '同名群'
+        client._uia_sender = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, '同名会话'):
+            client._open_send_target('同名群', 'g1@chatroom')
+        client._uia_sender.open_chat.assert_not_called()
+
+    def test_stable_group_id_is_preserved_while_display_name_changes(self):
+        client, db = self.make_client()
+        client._name_to_username['旧群名'] = 'g@chatroom'
+        client._username_to_name['g@chatroom'] = '旧群名'
+        db.get_nickname.return_value = '新群名'
+        db.get_sessions.return_value = [{'username': 'g@chatroom'}]
+        db.search_contact.return_value = []
+        sender = MagicMock()
+        sender.open_chat.return_value = True
+        sender._chat_is_open.return_value = True
+        sender.right_pane_left, sender.render_h, sender.render_w = 200, 800, 1000
+        client._uia_sender = sender
+        with patch('wechat.replica_compat.time.sleep'):
+            self.assertTrue(client.SendMsg('你好', 'g@chatroom'))
+        sender.open_chat.assert_called_once_with('新群名', exact=True, expected_group=True)
+
+    def test_similar_chat_titles_never_confirm_sending(self):
+        for observed in ['小明的群', '小明', '测试二群', '测试群聊']:
+            self.assertFalse(_title_ocr_name_matches(observed, '测试群'))
+        self.assertTrue(_title_ocr_name_matches('测试群 (42)', '测试群'))
 
     def test_reads_database_messages_in_chronological_order(self):
         client, db = self.make_client()
@@ -227,11 +284,52 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         with patch("wechatauto.guia.WeChatGUI.__init__", return_value=None):
             return client._sender
 
+    def test_send_confirmation_reads_header_after_input_name_becomes_draft(self):
+        gui = self.make_gui()
+        driver = MagicMock()
+        driver.current_chat.return_value = '这段是待发送的回复，不是聊天名'
+        gui._get_uia = MagicMock(return_value=driver)
+        gui.ocr_zoomed = MagicMock()
+        with patch('wechat.replica_compat._uia_chat_title', return_value='测试联系人'):
+            self.assertTrue(gui._chat_is_open('测试联系人'))
+        driver.current_chat.assert_not_called()
+        gui.ocr_zoomed.assert_not_called()
+
+    def test_wrong_header_cannot_be_overridden_by_input_or_ocr(self):
+        gui = self.make_gui()
+        gui._get_uia = MagicMock(return_value=MagicMock())
+        gui.ocr_zoomed = MagicMock()
+        with patch('wechat.replica_compat._uia_chat_title', return_value='其他人'):
+            self.assertFalse(gui._chat_is_open('测试联系人'))
+        gui.ocr_zoomed.assert_not_called()
+
+    def test_header_reader_uses_exact_title_anchor(self):
+        driver = MagicMock()
+        header = MagicMock()
+        header.Name = '测试群'
+        with patch('wechatauto.uia_driver._find_by', return_value=header) as find:
+            self.assertEqual(_uia_chat_title(driver), '测试群')
+        predicate = find.call_args.args[1]
+        self.assertTrue(predicate(type('C', (), {'AutomationId': 'content.title.current_chat_name_label'})()))
+        self.assertFalse(predicate(type('C', (), {'AutomationId': 'chat_input_field'})()))
+
     def test_uia_refresh_is_forwarded_to_upstream(self):
         gui = self.make_gui()
         with patch("wechatauto.guia.WeChatGUI._get_uia", return_value="driver") as getter:
             self.assertEqual(gui._get_uia(refresh=True), "driver")
         getter.assert_called_once_with(refresh=True)
+
+    def test_uia_accepts_english_main_window_title(self):
+        from wechatauto import uia_driver
+
+        gui = self.make_gui()
+        with patch.object(uia_driver, "MAIN_NAMES", ("微信", "Weixin")), \
+             patch.object(uia_driver, "MAIN_NAME_HINTS", ("微信", "Weixin")), \
+             patch("wechatauto.guia.WeChatGUI._get_uia", return_value=None):
+            gui._get_uia()
+            self.assertTrue(uia_driver._title_is_main("WeChat"))
+            self.assertTrue(uia_driver._title_is_main("WeChat (1)"))
+            self.assertFalse(uia_driver._title_is_main("Unrelated window"))
 
     def test_desktop_probe_handles_removed_upstream_method_and_black_screen(self):
         from PIL import Image
@@ -299,36 +397,37 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_search_ocr_scales_keep_clearer_text_and_missing_headings(self):
         merged = _merge_search_ocr_rows(
             [
-                [("能@0问渠安", 87, 129, 32, 10)],
+                [("能@0赤霄安", 87, 129, 32, 10)],
                 [
-                    ("问渠安", 88, 129, 12, 12),
+                    ("赤霄安", 88, 129, 12, 12),
                     ("群聊", 84, 275, 11, 10),
                 ],
             ],
-            "问渠安全实验室",
+            "赤霄安全实验室",
         )
 
-        self.assertEqual(merged[0][0], "问渠安")
+        self.assertEqual(merged[0][0], "赤霄安")
         self.assertIn(("群聊", 84, 275, 11, 10), merged)
 
-    def test_title_match_tolerates_one_glyph_but_rejects_another_chat(self):
-        self.assertTrue(_title_ocr_name_matches("开芯摸鱼小分队（8）", "开心摸鱼小分队"))
+    def test_title_match_rejects_one_glyph_error_in_send_confirmation(self):
+        self.assertFalse(_title_ocr_name_matches("开芯摸鱼小分队（8）", "开心摸鱼小分队"))
+        self.assertTrue(_title_ocr_name_matches("开心摸鱼小分队（8）", "开心摸鱼小分队"))
         self.assertFalse(_title_ocr_name_matches("完全不同的群聊", "开心摸鱼小分队"))
 
     def test_same_name_search_selects_group_from_member_preview(self):
         rows = [
-            ("裴怡淼", 128, 117, 14, 12),
-            ("包含：裴怡淼〔企业：问渠安全", 128, 142, 12, 11),
-            ("@问渠安全实验室", 177, 215, 23, 11),
-            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("张小明", 128, 117, 14, 12),
+            ("包含：张小明〔企业：赤霄安全", 128, 142, 12, 11),
+            ("@赤霄安全实验室", 177, 215, 23, 11),
+            ("企业：赤霄安全实验室", 128, 238, 12, 11),
             ("群聊", 84, 275, 12, 11),
-            ("能@0问渠安", 87, 321, 32, 10),
+            ("能@0赤霄安", 87, 321, 32, 10),
             ("搜索网络结果", 85, 372, 14, 10),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=261,
             render_h=815,
             expected_group=True,
@@ -338,16 +437,16 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_same_name_search_prefers_unique_group_in_most_used_section(self):
         rows = [
             ("最常便用", 84, 83, 12, 11),
-            ("问渠安", 128, 129, 12, 12),
-            ("包含：裴怡淼〔企业：", 128, 205, 12, 11),
-            ("@问渠安全实验室", 177, 278, 23, 11),
-            ("企业：问渠安全实验室", 128, 301, 12, 11),
+            ("赤霄安", 128, 129, 12, 12),
+            ("包含：张小明〔企业：", 128, 205, 12, 11),
+            ("@赤霄安全实验室", 177, 278, 23, 11),
+            ("企业：赤霄安全实验室", 128, 301, 12, 11),
             ("搜索网络结果", 84, 340, 14, 10),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=221,
             render_h=815,
             expected_group=True,
@@ -358,16 +457,16 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_same_name_search_accepts_runtime_group_row_at_x_87(self):
         rows = [
             ("最常便用", 84, 83, 12, 11),
-            ("生@0问渠安全实验室", 87, 129, 32, 10),
-            ("裴怡淼0", 127, 181, 14, 12),
-            ("包含：裴怡淼〔企业：问渠安全实验室", 128, 206, 12, 11),
-            ("@问渠安全实验室", 177, 279, 23, 11),
-            ("企业：问渠安全实验室", 128, 302, 12, 11),
+            ("生@0赤霄安全实验室", 87, 129, 32, 10),
+            ("张小明0", 127, 181, 14, 12),
+            ("包含：张小明〔企业：赤霄安全实验室", 128, 206, 12, 11),
+            ("@赤霄安全实验室", 177, 279, 23, 11),
+            ("企业：赤霄安全实验室", 128, 302, 12, 11),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=300,
             render_h=815,
             expected_group=True,
@@ -378,17 +477,17 @@ class ReplicaCompatibilityTests(unittest.TestCase):
     def test_most_used_section_does_not_expand_to_distant_contains_marker(self):
         rows = [
             ("最常便用", 84, 83, 12, 11),
-            ("生@0问渠安全实验室", 87, 129, 32, 10),
-            ("裴怡淼", 128, 213, 14, 12),
-            ("@问渠安全实验室", 177, 215, 23, 11),
-            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("生@0赤霄安全实验室", 87, 129, 32, 10),
+            ("张小明", 128, 213, 14, 12),
+            ("@赤霄安全实验室", 177, 215, 23, 11),
+            ("企业：赤霄安全实验室", 128, 238, 12, 11),
             ("群聊", 84, 275, 11, 10),
-            ("包含：裴怡淼〔企业：问渠安全实验室", 128, 334, 12, 11),
+            ("包含：张小明〔企业：赤霄安全实验室", 128, 334, 12, 11),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=300,
             render_h=815,
             expected_group=True,
@@ -397,7 +496,7 @@ class ReplicaCompatibilityTests(unittest.TestCase):
         self.assertEqual(selected, rows[1])
 
     def test_search_result_click_uses_text_area_not_avatar(self):
-        row = ("生@0问渠安全实验室", 87, 129, 32, 10)
+        row = ("生@0赤霄安全实验室", 87, 129, 32, 10)
 
         self.assertEqual(_search_result_click_point(row, 300), (165, 134))
 
@@ -420,15 +519,15 @@ class ReplicaCompatibilityTests(unittest.TestCase):
 
     def test_same_name_search_selects_non_group_contact(self):
         rows = [
-            ("@问渠安全实验室", 177, 215, 23, 11),
-            ("企业：问渠安全实验室", 128, 238, 12, 11),
+            ("@赤霄安全实验室", 177, 215, 23, 11),
+            ("企业：赤霄安全实验室", 128, 238, 12, 11),
             ("群聊", 84, 275, 12, 11),
-            ("问渠安全实验室", 128, 321, 12, 12),
+            ("赤霄安全实验室", 128, 321, 12, 12),
         ]
 
         selected = _select_search_result(
             rows,
-            "问渠安全实验室",
+            "赤霄安全实验室",
             sidebar_right=261,
             render_h=815,
             expected_group=False,

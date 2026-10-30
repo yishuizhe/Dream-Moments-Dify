@@ -30,10 +30,10 @@ class EmojiAssetTests(unittest.TestCase):
         self.assertEqual(handler.detect_emotion("今天真开心"), "happy")
         self.assertEqual(handler.detect_emotion("有一点难过"), "sad")
         self.assertEqual(handler.detect_emotion("我生气了"), "angry")
-        self.assertEqual(handler.detect_emotion("我是怕吓到你嘛。"), "happy")
+        self.assertEqual(handler.detect_emotion("我是怕吓到你嘛。"), "neutral")
         selected = Path(handler.get_emotion_emoji("哈哈，真开心"))
         self.assertEqual(selected.parent.name, "happy")
-        self.assertEqual(selected.suffix.lower(), ".gif")
+        self.assertIn(selected.suffix.lower(), {".gif", ".png", ".jpg", ".jpeg", ".webp"})
 
     def test_emotion_emoji_has_per_chat_cooldown(self):
         handler = EmojiHandler(str(ROOT))

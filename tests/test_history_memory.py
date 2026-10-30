@@ -16,6 +16,19 @@ from services.database import Base, HistoryStore, make_identity_key, resolve_ide
 
 
 class HistoryMemoryTests(unittest.TestCase):
+    def test_summary_member_filter_precedes_recent_group_limit(self):
+        for sender, name, content in [("wxid_a", "旧名", "旧发言"), ("群名片", "群名片", "旧身份")]:
+            self.store.record_message(chat_id="g", sender_id=sender, sender_name=name,
+                                      role="user", content=content, is_group=True)
+        for i in range(260):
+            self.store.record_message(chat_id="g", sender_id="wxid_b", sender_name="其他人",
+                                      role="user", content=str(i), is_group=True)
+        rows = self.store.get_messages_for_summary("g", 20, member_name="新名",
+                                                   member_ids=["wxid_a", "群名片"])
+        self.assertEqual([row["content"] for row in rows], ["旧发言", "旧身份"])
+        self.assertEqual({row["username"] for row in self.store.get_summary_members("g")},
+                         {"wxid_a", "群名片", "wxid_b"})
+
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)

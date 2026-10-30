@@ -36,6 +36,24 @@ class FakeHistory:
 
 
 class GroupIdentityTests(unittest.TestCase):
+    def test_group_prompt_never_reads_global_person_memory_or_other_chats(self):
+        handler = MessageHandler.__new__(MessageHandler)
+        handler.ai_provider = 'openai_compatible'
+        handler.prompt_content = 'persona'
+        handler.history_store = Mock()
+        handler.history_store.get_memory_items.return_value = ['只在本群提过的话']
+        handler.history_store.format_recent_transcript.return_value = '本群刚才的话题'
+        handler.ai = Mock()
+        handler.ai.get_response.return_value = '回应'
+        handler.get_api_response('本群当前消息', 'group:g:member:wxid_a', is_group=True,
+                                 sender_name='A', identity_key='person:owner',
+                                 memory_key='person:owner', chat_id='g', sender_id='wxid_a')
+        handler.history_store.get_memory_items.assert_called_once_with('group:g:member:wxid_a')
+        handler.history_store.get_memory_items_for_person.assert_not_called()
+        handler.history_store.get_person_profile.assert_not_called()
+        system_prompt = handler.ai.get_response.call_args.args[2]
+        self.assertIn('只在本群提过的话', system_prompt)
+
     def test_complete_message_jobs_are_serialized(self):
         handler = MessageHandler.__new__(MessageHandler)
         handler._processing_lock = threading.Lock()
@@ -101,7 +119,7 @@ class GroupIdentityTests(unittest.TestCase):
         message, context_key, system_prompt = handler.ai.get_response.call_args.args
         self.assertIn("A\uff1afirst", message)
         self.assertIn("B\uff1asecond", message)
-        self.assertEqual(context_key, "group:g:member:b-id")
+        self.assertEqual(context_key, "group:g:dialogue:v2")
         self.assertIn("当前对话对象/触发成员：B", system_prompt)
         self.assertIn("B likes coffee", system_prompt)
         self.assertEqual(handler.wx.sent, [("g", "ok")])

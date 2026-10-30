@@ -17,10 +17,59 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
+from .message_types import is_poke_notice
 
 
 _GROUP_SENDER_RE = re.compile(r"^(wxid_[0-9A-Za-z_]+):\s*\n")
 logger = logging.getLogger(__name__)
+
+
+def _room_member_display_names(data: bytes) -> dict[str, str]:
+    """Read member wxid/name fields from WeChat's RoomData protobuf."""
+    def fields(blob):
+        position = 0
+
+        def varint():
+            nonlocal position
+            value = 0
+            for shift in range(0, 70, 7):
+                if position >= len(blob):
+                    raise ValueError("truncated varint")
+                byte = blob[position]
+                position += 1
+                value |= (byte & 127) << shift
+                if byte < 128:
+                    return value
+            raise ValueError("invalid varint")
+
+        while position < len(blob):
+            tag = varint()
+            number, wire = tag >> 3, tag & 7
+            if not number:
+                raise ValueError("invalid field")
+            if wire == 0:
+                yield number, varint()
+                continue
+            size = varint() if wire == 2 else {1: 8, 5: 4}.get(wire)
+            if size is None or position + size > len(blob):
+                raise ValueError("invalid field length")
+            value = blob[position:position + size]
+            position += size
+            yield number, value
+
+    try:
+        result = {}
+        for number, member in fields(data):
+            if number != 1 or not isinstance(member, bytes):
+                continue
+            values = dict(fields(member))
+            username = values.get(1, b"").decode("utf-8")
+            display = values.get(2, b"").decode("utf-8")
+            if username and display:
+                result[username] = display
+        return result
+    except (ValueError, AttributeError, UnicodeError):
+        return {}
 
 
 def _safe_ocr_name_matches(ocr_name: str, target: str) -> bool:
@@ -63,12 +112,35 @@ def _ocr_name_similarity(ocr_name: str, target: str) -> float:
 
 
 def _title_ocr_name_matches(ocr_name: str, target: str) -> bool:
-    """Match only title-line OCR, tolerating a single difficult CJK glyph."""
-
-    if _safe_ocr_name_matches(ocr_name, target):
-        return True
+    """Sending requires the entire title, never a substring or fuzzy match."""
+    observed = re.sub(r"\s+", "", str(ocr_name or ""))
     expected = re.sub(r"\s+", "", str(target or ""))
-    return len(expected) >= 4 and _ocr_name_similarity(ocr_name, target) >= 0.72
+    if observed == expected:
+        return bool(expected)
+    # UI may append the group member count; do not strip words or glyphs.
+    return bool(expected) and re.sub(r"[（(]\d+[）)]$", "", observed) == expected
+
+
+def _uia_chat_title(driver: Any) -> str | None:
+    """Read the stable header, not the input's accessible Name/value.
+
+    WeChat changes the input's Name to the draft after typing. Upstream's
+    current_chat() reads that Name and therefore cannot verify a populated
+    input. The header's dedicated ID remains tied to the conversation.
+    """
+    from wechatauto.uia_driver import _find_by
+
+    header = _find_by(
+        getattr(driver, "_win", None),
+        lambda control: str(getattr(control, "AutomationId", "") or "").split(".")[-1]
+        == "current_chat_name_label",
+        max_depth=45,
+    )
+    if header is not None:
+        value = getattr(header, "Name", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _merge_search_ocr_rows(
@@ -417,6 +489,14 @@ class ReplicaWeChatClient:
                 def _get_uia(self, refresh: bool = False):
                     # Newer WeChat builds expose search controls again. Keep
                     # OCR target selection, but use upstream UIA focus helpers.
+                    # Some Chinese 4.1.15 clients also use the English window
+                    # title; upstream otherwise rejects their visible UIA tree.
+                    from wechatauto import uia_driver
+
+                    for attribute in ("MAIN_NAMES", "MAIN_NAME_HINTS"):
+                        names = getattr(uia_driver, attribute, ())
+                        if "WeChat" not in names:
+                            setattr(uia_driver, attribute, (*names, "WeChat"))
                     return super()._get_uia(refresh=refresh)
 
                 def desktop_available(self) -> bool:
@@ -468,6 +548,14 @@ class ReplicaWeChatClient:
                     normalized_name = re.sub(r"\s+", "", str(name or ""))
                     if not normalized_name:
                         return False
+                    uia = self._get_uia()
+                    if uia is not None:
+                        try:
+                            current = _uia_chat_title(uia)
+                            if isinstance(current, str) and current:
+                                return re.sub(r"\s+", "", current) == normalized_name
+                        except Exception:
+                            pass
                     for attempt, scale in enumerate((2, 3, 2)):
                         try:
                             self._update_render_rect()
@@ -569,17 +657,63 @@ class ReplicaWeChatClient:
                     if not self.ensure_visible():
                         return False
                     self._update_render_rect()
-                    if expected_group is None and self._chat_is_open(name):
+                    # _open_send_target already rejected duplicate display
+                    # titles across stable IDs before calling this method.
+                    if self._chat_is_open(name):
                         return True
+                    uia = self._get_uia()
+                    if uia is not None:
+                        from wechatauto.uia_driver import _find_by
+
+                        session = _find_by(
+                            getattr(uia, "_win", None),
+                            lambda control: str(getattr(control, "AutomationId", "") or "")
+                            == f"session_item_{name}",
+                            max_depth=45,
+                        )
+                        if session is not None and uia._click_ctrl(session):
+                            time.sleep(0.3)
+                            if self._chat_is_open(name):
+                                return True
                     if self._search_chat(name, expected_group=expected_group):
                         return self._chat_is_open(name)
                     return False
 
-            self._uia_sender = SafeWeChatGUI()
+            from .wxauto4_compat import ensure_wechat_main_window
+
+            # WeChat can be living in the tray while its hidden window still
+            # exists; upstream WeChatGUI only accepts a visible window.
+            last_error: Exception | None = None
+            for attempt in range(2):
+                ensure_wechat_main_window(timeout=6.0)
+                try:
+                    self._uia_sender = SafeWeChatGUI()
+                    last_error = None
+                    break
+                except RuntimeError as exc:
+                    last_error = exc
+                    if attempt == 0:
+                        time.sleep(1.0)
+            if self._uia_sender is None:
+                raise last_error or RuntimeError("未找到微信主窗口，请确认微信已登录并运行")
             self._uia_sender.calibrate_layout(save=False)
         return self._uia_sender
 
     def _open_send_target(self, who: str, username: str) -> Any:
+        # OCR/UIA confirms a display title, so equal titles cannot establish
+        # which stable conversation is open. Refuse before touching input.
+        session_ids = {
+            str(row.get("username") or "") for row in self._db.get_sessions(limit=500)
+            if str(row.get("username") or "")
+            and self._display_name(str(row["username"]), refresh=True) == who
+        }
+        contact_ids = {
+            str(row.get("username") or "") for row in (self._db.search_contact(who) or [])
+            if who in {str(row.get("nick_name") or ""), str(row.get("remark") or "")}
+            and str(row.get("username") or "")
+        }
+        if (session_ids | contact_ids) - {username}:
+            raise RuntimeError(f"微信发送目标存在同名会话，已拒绝猜测: {who}")
         sender = self._sender
         expected_group = username.endswith("@chatroom")
         if not sender.open_chat(who, exact=True, expected_group=expected_group):
@@ -611,6 +745,24 @@ class ReplicaWeChatClient:
 
     def GetMyInfo(self) -> dict[str, str]:  # noqa: N802
         return dict(self.myinfo)
+
+    def GetGroupMembers(self, chat_id: str) -> list[dict]:  # noqa: N802
+        if not str(chat_id).endswith("@chatroom"):
+            return []
+        members = [dict(item) for item in self._db.get_group_members(chat_id)]
+        connection = self._db._contact_conn()
+        if connection is None:
+            return members
+        try:
+            row = connection.execute(
+                "SELECT ext_buffer FROM chat_room WHERE username=?", (chat_id,)
+            ).fetchone()
+            names = _room_member_display_names(bytes(row[0])) if row and row[0] else {}
+            for member in members:
+                member["group_nickname"] = names.get(str(member.get("username") or ""), "")
+            return members
+        finally:
+            connection.close()
 
     def _display_name(self, username: str, *, refresh: bool = False) -> str:
         if username in self._username_to_name and not refresh:
@@ -645,6 +797,8 @@ class ReplicaWeChatClient:
             return ""
         if name in {"filehelper", "文件传输助手"}:
             return "filehelper"
+        if name in self._username_to_name or name in self._name_to_username.values():
+            return name
         if name in self._name_to_username:
             return self._name_to_username[name]
 
@@ -669,7 +823,7 @@ class ReplicaWeChatClient:
         # active session list than through fuzzy contact search.
         for row in self._db.get_sessions(limit=500):
             username = str(row.get("username") or "")
-            if username and self._display_name(username) == name:
+            if username and (username == name or self._display_name(username) == name):
                 self._name_to_username[name] = username
                 return username
         return ""
@@ -751,7 +905,7 @@ class ReplicaWeChatClient:
             stable_sender = self._current_username
 
         raw_type = str(row.get("type") or "friend")
-        is_system = raw_type in {"系统消息", "时间", "notice", "system"}
+        is_system = raw_type in {"系统消息", "时间", "notice", "system"} or is_poke_notice(content)
         attr = "self" if is_self else ("system" if is_system else "friend")
         return ReplicaMessage(
             content=content,
@@ -776,6 +930,8 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
+            if who == username:
+                who = self._display_name(username, refresh=True)
             from wechatauto import rhythm
 
             rhythm.gate("send")
@@ -809,6 +965,8 @@ class ReplicaWeChatClient:
             username = self._resolve_username(who)
             if not username:
                 raise RuntimeError(f"无法解析微信发送目标: {who}")
+            if who == username:
+                who = self._display_name(username, refresh=True)
             from wechatauto import rhythm
 
             rhythm.gate("send-file")
@@ -836,6 +994,33 @@ class ReplicaWeChatClient:
                     raise
                 sender._input.key(VK_RETURN)
                 return True
+            finally:
+                sender.restore_zorder()
+
+
+    def Poke(self, who: str, **_: Any) -> bool:  # noqa: N802
+        """Only private contacts are safe with upstream's latest-avatar helper."""
+
+        with self._send_lock:
+            username = self._resolve_username(who)
+            if not username:
+                raise RuntimeError(f"无法解析拍一拍目标: {who}")
+            if username.endswith("@chatroom"):
+                # Upstream poke(who) picks the latest left-side avatar, not a
+                # verified group member. A group title is never a person.
+                logger.warning("群聊拍一拍缺少可验证的成员目标，已跳过: %s", who)
+                return False
+            if who == username:
+                who = self._display_name(username, refresh=True)
+            sender = self._open_send_target(who, username)
+            try:
+                uia = sender._get_uia()
+                if uia is None:
+                    return False
+                if uia.current_chat() != who:
+                    return False
+                # Do not let the upstream helper switch to a guessed chat.
+                return bool(uia.poke())
             finally:
                 sender.restore_zorder()
 

@@ -19,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
+from .message_types import is_poke_notice, quote_metadata, strip_transport_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class IncomingMessage:
     is_quote: bool = False
     quoted_sender: str = ""
     quoted_content: str = ""
+    quoted_sender_id: str = ""
     raw: Any = None
 
     @property
@@ -130,6 +132,14 @@ class WxAuto4PollingAdapter:
             self._client = None
             self._my_name_cache = ""
 
+    def get_group_members(self, chat_id: str) -> list[dict]:
+        """Read group-specific aliases without switching the foreground chat."""
+        with self._ui_lock:
+            getter = getattr(self.client, "GetGroupMembers", None)
+            if not callable(getter):
+                return []
+            return list(getter(chat_id) or [])
+
     def is_online(self) -> bool:
         """尽可能使用免费版公开能力判断微信是否在线。"""
 
@@ -146,6 +156,15 @@ class WxAuto4PollingAdapter:
 
             # 能成功创建实例时，旧/精简版本也可继续尝试 ChatWith。
             return True
+
+    def get_my_id(self) -> str:
+        """Stable identity for quoted replies, independent of group nickname."""
+        with self._ui_lock:
+            getter = getattr(self.client, "GetMyInfo", None)
+            info = getter() if callable(getter) else getattr(self.client, "myinfo", {})
+            if isinstance(info, dict):
+                return str(info.get("username") or info.get("wxid") or "")
+            return ""
 
     def get_my_name(self) -> str:
         """兼容 wxauto4 和旧 wxauto 的多种昵称字段。"""
@@ -354,6 +373,172 @@ class WxAuto4PollingAdapter:
             # SendFiles creates a file attachment, which is intentionally not
             # used as a substitute for a WeChat voice bar.
             return None, False
+
+    def poke(self, chat_name: str) -> bool:
+        """Poke (拍一拍) the current chat when the backend supports it."""
+
+        with self._ui_lock:
+            method = getattr(self.client, "Poke", None)
+            if not callable(method):
+                return False
+            try:
+                return bool(method(who=chat_name))
+            except TypeError:
+                return bool(method(chat_name))
+            except Exception:
+                logger.warning("拍一拍失败: %s", chat_name, exc_info=True)
+                return False
+
+    # ------------------------------------------------------------------
+    # Moments (朋友圈): DB read + UIA interactions
+    # ------------------------------------------------------------------
+    def moment_feed(self, limit: int = 20) -> list[dict]:
+        """Read the cached Moments timeline from the local database."""
+
+        backend = getattr(self.client, "backend_name", "")
+        db = getattr(self.client, "_db", None)
+        if backend != "wechatauto-replica" or db is None:
+            return []
+        try:
+            from wechatauto import MomentDB
+
+            return list(MomentDB(db).get_moments(limit=limit) or [])
+        except Exception:
+            logger.warning("读取朋友圈缓存失败", exc_info=True)
+            return []
+
+    def _moment_client(self) -> Any:
+        from types import SimpleNamespace
+        from wechatauto.moment import Moment
+
+        sender = getattr(self.client, "_sender", None)
+        if sender is None:
+            return None
+        # ``Moment`` only needs ``wx_obj._gui.main_hwnd`` plus an optional
+        # ``SwitchToMoments``; the replica client exposes its GUI through
+        # ``_sender``.
+        proxy = SimpleNamespace(_gui=sender, SwitchToMoments=lambda: self.open_moments())
+        return Moment(proxy)
+
+    def open_moments(self) -> bool:
+        """Switch the WeChat foreground to the Moments timeline."""
+
+        with self._ui_lock:
+            try:
+                from types import SimpleNamespace
+                from wechatauto.wx import WeChat
+
+                sender = getattr(self.client, "_sender", None)
+                if sender is None or not sender.ensure_visible():
+                    return False
+                proxy = SimpleNamespace(_gui=sender)
+                if WeChat._switch_to_moments_new_style(proxy):
+                    return True
+                return bool(WeChat.SwitchToMoments(proxy))
+            except Exception:
+                logger.warning("打开朋友圈失败", exc_info=True)
+                return False
+
+    def like_moment(self, publisher: str) -> bool:
+        with self._ui_lock:
+            try:
+                if not self.open_moments():
+                    return False
+                moment = self._moment_client()
+                if moment is None:
+                    return False
+                response = moment.LikeMoment(publisher=publisher)
+                return self._response_ok(response)
+            except Exception:
+                logger.warning("朋友圈点赞失败: %s", publisher, exc_info=True)
+                return False
+
+    def comment_moment(self, publisher: str, text: str) -> bool:
+        with self._ui_lock:
+            try:
+                if not text or not self.open_moments():
+                    return False
+                moment = self._moment_client()
+                if moment is None:
+                    return False
+                response = moment.CommentMoment(publisher=publisher, content=text)
+                return self._response_ok(response)
+            except Exception:
+                logger.warning("朋友圈评论失败: %s", publisher, exc_info=True)
+                return False
+
+    def publish_moment(self, text: str, images: list[str] | None = None) -> bool:
+        """Experimental: publish a Moments post through the custom-drawn UI.
+
+        The upstream library removed ``PublishMoments`` because WeChat 4.x
+        draws the composer itself. This tries the commonly exposed button
+        names and a text control; it is disabled by default and may fail.
+        """
+
+        with self._ui_lock:
+            try:
+                if not text:
+                    return False
+                if not self.open_moments():
+                    return False
+                import time as _time
+
+                import uiautomation as uia
+
+                sender = getattr(self.client, "_sender", None)
+                root = uia.ControlFromHandle(sender.main_hwnd)
+                from wechatauto.wx import _find_descendant
+
+                trigger = _find_descendant(
+                    root,
+                    lambda c: (getattr(c, "Name", "") or "").strip()
+                    in {"发表", "发布", "发表朋友圈", "相机", "拍照", "Publish"},
+                    max_depth=20,
+                )
+                if trigger is None:
+                    logger.warning("未找到朋友圈发表入口")
+                    return False
+                trigger.Click()
+                _time.sleep(1.0)
+                dialog_root = uia.GetRootControl()
+                editor = _find_descendant(
+                    dialog_root,
+                    lambda c: getattr(c, "ControlTypeName", "")
+                    in {"EditControl", "DocumentControl"},
+                    max_depth=12,
+                )
+                if editor is None:
+                    logger.warning("未找到朋友圈输入框")
+                    return False
+                editor.Click()
+                editor.SendKeys(text, waitTime=0.03)
+                _time.sleep(0.5)
+                publish = _find_descendant(
+                    dialog_root,
+                    lambda c: (getattr(c, "Name", "") or "").strip() in {"发表", "发布", "Publish"},
+                    max_depth=12,
+                )
+                if publish is None:
+                    logger.warning("未找到朋友圈发表按钮")
+                    return False
+                publish.Click()
+                return True
+            except Exception:
+                logger.warning("自动发朋友圈失败", exc_info=True)
+                return False
+
+    @staticmethod
+    def _response_ok(response: Any) -> bool:
+        if response is None:
+            return False
+        if isinstance(response, bool):
+            return response
+        value = getattr(response, "is_success", None)
+        if value is not None:
+            return bool(value)
+        if isinstance(response, dict):
+            return bool(response.get("is_success", response.get("success", False)))
+        return bool(response)
 
     # 兼容现有 MessageHandler，后续可逐步迁移到 send_text/send_file。
     def SendMsg(self, msg: str, who: str, **kwargs: Any) -> Any:  # noqa: N802
@@ -637,7 +822,7 @@ class WxAuto4PollingAdapter:
 
         kind_lower = f"{kind} {attr} {raw.__class__.__name__}".lower()
         content, is_quote, quoted_sender, quoted_content = self._parse_quote_message(
-            raw, raw_content, kind_lower
+            raw, strip_transport_prefix(raw_content) if is_group_chat else raw_content, kind_lower
         )
         if not content:
             return None
@@ -648,7 +833,8 @@ class WxAuto4PollingAdapter:
             or bool(my_name and sender == my_name)
             or sender.lower() in {"self", "me", "我"}
         )
-        is_system = any(marker in kind_lower for marker in ("systemmessage", "system", "time", "notice"))
+        is_system = (any(marker in kind_lower for marker in ("systemmessage", "system", "time", "notice"))
+                     or is_poke_notice(content))
         incoming_human = not is_self and not is_system and bool(sender)
         if is_group_chat is not None:
             is_group = bool(is_group_chat)
@@ -696,6 +882,7 @@ class WxAuto4PollingAdapter:
             is_quote=is_quote,
             quoted_sender=quoted_sender,
             quoted_content=quoted_content,
+            quoted_sender_id=quote_metadata(raw_content).get("sender_id", ""),
             raw=raw,
         )
         return _SnapshotMessage(token=token, message=message, incoming_human=incoming_human)
@@ -728,6 +915,10 @@ class WxAuto4PollingAdapter:
         )
         is_quote = "quote" in kind_lower or bool(quoted_sender or quoted_content)
         reply_content = content.strip()
+        xml_quote = quote_metadata(content)
+        if xml_quote:
+            return (xml_quote["reply"], True, quoted_sender or xml_quote["sender"],
+                    quoted_content or xml_quote["content"])
 
         # wxauto4 QuoteMessage.repattern for Simplified Chinese:
         # ^(.*)\s*引用\s+(.+?)\s+的消息\s*:\s*(.*)$

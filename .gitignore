@@ -4,6 +4,10 @@ data/avatars/*
 !data/avatars/MONO/avatar.md
 !data/avatars/MONO/emojis/
 !data/avatars/MONO/emojis/**
+!data/avatars/Claude/
+!data/avatars/Claude/avatar.md
+data/avatars/Claude/*
+!data/avatars/Claude/avatar.md
 # Database
 *.db
 *.sqlite
@@ -206,6 +210,18 @@ data/images/temp/
 data/voices/
 data/operit_sessions.json
 data/operit_sessions.json.tmp
+data/proactive_state.json
+data/proactive_state.json.tmp
+data/moments_state.json
+data/moments_state.json.tmp
+data/moments_drafts/
+data/dialogue_progress.json
+data/dialogue_progress.tmp
+data/group_participation.json
+data/*replay*
+data/dialogue-update-*.md
+data/images/incoming/
+data/moments_native_probe.json
 .android-tools/
 android/**/.gradle/
 android/**/build/

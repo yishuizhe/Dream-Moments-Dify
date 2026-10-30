@@ -9,7 +9,7 @@ This project preserves the original attribution and GPLv3 license. It does not b
 ## Highlights
 
 - Automatic WeChat backend selection: `wxauto4==41.1.7` for `4.1.11.x`, and `wechatauto-replica==1.2.4.4` for the self-rendered UI in WeChat `4.1.12+`.
-- Group renames keep working: listeners, history, and per-member memory use the stable WeChat conversation ID while the current display name is used for sending.
+- Group renames keep working: listeners, history, per-member memory and reply routing use the stable WeChat conversation ID.
 - `GetSession()`-driven polling: chats are opened once to build a baseline, then only unread or preview-changed whitelisted chats are opened.
 - Direct DeepSeek/OpenAI-compatible Chat Completions or Dify Chat API.
 - Enforces normal punctuation and concise sentences, repairs obvious unpunctuated replies, and automatically splits long replies into natural WeChat bubbles without requiring model backslashes.
@@ -20,6 +20,28 @@ This project preserves the original attribution and GPLv3 license. It does not b
 - External `plugins/*/dream_plugin.py` support with isolated failures and direct command replies.
 - Emotion-aware animated cat GIFs from Google Noto Emoji Animation.
 - One concise startup banner, WARNING+ console logs, and detailed INFO file logs.
+
+## What's new in 2.2.1
+
+- Shared dialogue within a group, with strictly separate per-group member memory and interaction progress.
+- Short follow-up questions and corrections do not need another mention or wait for the ambient participation cooldown. Successive messages are coalesced and follow-ups have a separate rate budget.
+- Native quote sender IDs and legacy text prefixes are parsed; poke notices and old generated summaries do not become human evidence in summaries.
+- Accept corrections, end unwanted jokes, remember completed outcomes, and avoid recycling persona catchphrases. Match usable meme images to the current reply.
+- Stable chat-ID routing and actual-header verification improve WeChat sends.
+- Public templates contain no contacts or keys. Scheduled proactive messages, Moments and optional message-driven group participation are disabled by default. To opt into participation, copy `data/group_participation.json.template` to `data/group_participation.json`, set `enabled` to `true`, and restart. Existing local repeat rules are preserved.
+
+See [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md) for migration and validation scope.
+
+## Features introduced in 2.2.0 (included in this release)
+
+- **Claude persona**: `data/avatars/Claude/avatar.md` is bundled alongside the default `MONO` persona. Character jokes are occasional context-sensitive reactions, not fixed responses or real moderation powers.
+- **Baizhi Cloud route**: OpenAI-compatible endpoint with `deepseek-flash`; hidden thinking is disabled for that gateway, and malformed bracketed IPv6 `NO_PROXY` values are sanitized before `httpx` builds a client.
+- **Context memes**: besides emotion GIFs, replies can attach a tagged meme from `memes/index.json` (Claude / DeepSeek / GPT / Gemini / Kimi), with per-chat cooldown and hourly caps.
+- **Proactive messages**: whitelist-only private/group unprompted messages, quiet hours, 2–5 hour scheduling, recent-topic joins and optional group pokes.
+- **Forgetting-curve memory**: Ebbinghaus retention with importance, decay, spacing reinforcement and pruning; legacy string memories migrate automatically.
+- **Stable identity and scoped memory**: the person directory recognizes accounts; since 2.2.1, group replies read and write only the current group's member memory and never inject private-chat, other-group or Moments person cards.
+- **Moments**: cached timeline reads, whitelist-only likes/comments/replies, plus an experimental auto-publish path (disabled by default; WeChat 4.x draws that composer itself).
+- **Console**: a new “proactive & Moments” settings group and a raw `avatar.md` editor with an overwrite guard.
 
 ## Project history and retained capabilities
 
