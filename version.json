@@ -1,5 +1,5 @@
 {
-    "version": "2.2.0",
-    "last_update": "2026-10-24",
-    "description": "Claude persona, Baizhi deepseek-flash route, context memes, proactive messages, forgetting-curve memory, unified person identity, and Moments browsing/likes/comments with experimental publishing."
+    "version": "2.2.1",
+    "last_update": "2026-10-30",
+    "description": "Group-scoped dialogue and memory, reliable short follow-ups, quote identity parsing, poke/summary isolation, context-matched memes, and WeChat send verification fixes."
 }

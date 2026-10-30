@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PublicDefaultsTests(unittest.TestCase):
+    def test_optional_participation_is_disabled_and_generic_persona_is_bundled(self):
+        policy = json.loads((ROOT / 'data/group_participation.json.template').read_text(encoding='utf-8'))
+        self.assertIs(policy['enabled'], False)
+        self.assertTrue((ROOT / 'data/avatars/Claude/avatar.md').is_file())
+
     def test_public_config_contains_no_user_contacts_or_secrets(self):
         payload = json.loads(
             (ROOT / "src" / "config" / "config.json.template").read_text(

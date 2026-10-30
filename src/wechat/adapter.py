@@ -19,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
+from .message_types import is_poke_notice, quote_metadata, strip_transport_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class IncomingMessage:
     is_quote: bool = False
     quoted_sender: str = ""
     quoted_content: str = ""
+    quoted_sender_id: str = ""
     raw: Any = None
 
     @property
@@ -154,6 +156,15 @@ class WxAuto4PollingAdapter:
 
             # 能成功创建实例时，旧/精简版本也可继续尝试 ChatWith。
             return True
+
+    def get_my_id(self) -> str:
+        """Stable identity for quoted replies, independent of group nickname."""
+        with self._ui_lock:
+            getter = getattr(self.client, "GetMyInfo", None)
+            info = getter() if callable(getter) else getattr(self.client, "myinfo", {})
+            if isinstance(info, dict):
+                return str(info.get("username") or info.get("wxid") or "")
+            return ""
 
     def get_my_name(self) -> str:
         """兼容 wxauto4 和旧 wxauto 的多种昵称字段。"""
@@ -811,7 +822,7 @@ class WxAuto4PollingAdapter:
 
         kind_lower = f"{kind} {attr} {raw.__class__.__name__}".lower()
         content, is_quote, quoted_sender, quoted_content = self._parse_quote_message(
-            raw, raw_content, kind_lower
+            raw, strip_transport_prefix(raw_content) if is_group_chat else raw_content, kind_lower
         )
         if not content:
             return None
@@ -822,7 +833,8 @@ class WxAuto4PollingAdapter:
             or bool(my_name and sender == my_name)
             or sender.lower() in {"self", "me", "我"}
         )
-        is_system = any(marker in kind_lower for marker in ("systemmessage", "system", "time", "notice"))
+        is_system = (any(marker in kind_lower for marker in ("systemmessage", "system", "time", "notice"))
+                     or is_poke_notice(content))
         incoming_human = not is_self and not is_system and bool(sender)
         if is_group_chat is not None:
             is_group = bool(is_group_chat)
@@ -870,6 +882,7 @@ class WxAuto4PollingAdapter:
             is_quote=is_quote,
             quoted_sender=quoted_sender,
             quoted_content=quoted_content,
+            quoted_sender_id=quote_metadata(raw_content).get("sender_id", ""),
             raw=raw,
         )
         return _SnapshotMessage(token=token, message=message, incoming_human=incoming_human)
@@ -902,6 +915,10 @@ class WxAuto4PollingAdapter:
         )
         is_quote = "quote" in kind_lower or bool(quoted_sender or quoted_content)
         reply_content = content.strip()
+        xml_quote = quote_metadata(content)
+        if xml_quote:
+            return (xml_quote["reply"], True, quoted_sender or xml_quote["sender"],
+                    quoted_content or xml_quote["content"])
 
         # wxauto4 QuoteMessage.repattern for Simplified Chinese:
         # ^(.*)\s*引用\s+(.+?)\s+的消息\s*:\s*(.*)$

@@ -12,10 +12,12 @@ import json
 import logging
 import os
 import random
+import re
 import time
 from collections import deque
 from pathlib import Path
 from typing import Optional
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ class MemeHandler:
         self.entries: list[dict] = []
         self._last_sent_at: dict[str, float] = {}
         self._sent_history: dict[str, deque[float]] = {}
-        self._recent_picks: deque[str] = deque(maxlen=12)
+        self._recent_picks: dict[str, deque[str]] = {}
         self.reload()
 
     # ------------------------------------------------------------------
@@ -68,7 +70,7 @@ class MemeHandler:
                     if not relative:
                         continue
                     path = (self.avatar_root / relative).resolve()
-                    if not path.is_file():
+                    if self.avatar_root not in path.parents or not self._usable_image(path):
                         continue
                     tags = entry.get("tags") or []
                     if isinstance(tags, str):
@@ -83,16 +85,21 @@ class MemeHandler:
                 logger.warning("读取梗图索引失败: %s", exc)
         if self.entries:
             return
-        # Fallback: whatever images actually exist on disk.
-        for path in self.meme_root.rglob("*"):
-            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
-                self.entries.append({
-                    "path": str(path),
-                    "family": path.parent.name,
-                    "tags": [],
-                    "caption": path.stem,
-                })
+        # Unindexed images have no meaning attached. Do not randomly send them.
         logger.info("梗图库已加载: %s 张", len(self.entries))
+
+    @staticmethod
+    def _usable_image(path: Path) -> bool:
+        try:
+            if path.suffix.lower() not in IMAGE_SUFFIXES or path.stat().st_size > 20_000_000:
+                return False
+            with Image.open(path) as image:
+                if min(image.size) < 128:
+                    return False
+                image.verify()
+            return True
+        except (OSError, ValueError, Image.DecompressionBombError):
+            return False
 
     # ------------------------------------------------------------------
     # Selection
@@ -106,16 +113,23 @@ class MemeHandler:
         if not haystack:
             return 0.0
         score = 0.0
+        identity_tags = {"claude", "克劳德", "大小姐", "anthropic", "小克", "deepseek",
+                         "深度求索", "大肥鱼", "鲸鱼", "gpt", "chatgpt", "openai",
+                         "奥特曼", "gemini", "谷歌", "谷歌娘", "kimi", "月之暗面"}
         for tag in entry["tags"]:
-            if tag and tag.lower() in haystack:
-                score += max(1.0, min(3.0, len(tag) / 2.0))
-        family = entry.get("family") or ""
-        for word in FAMILY_KEYWORDS.get(family, ()):
-            if word.lower() in haystack:
-                score += 1.5
+            # Single glyphs such as 编/听/钱 match unrelated sentences.
+            # A character's name also says nothing about the picture's meaning.
+            if len(tag) >= 2 and tag.lower() not in identity_tags and tag.lower() in haystack:
+                hits = list(re.finditer(re.escape(tag.lower()), haystack))
+                if any(not re.search(r"(?:不|没|别|不是|并不|不用|没有|不要)(?:太|再|很|想|会|那么|这么)?$",
+                                     haystack[max(0, hit.start()-8):hit.start()]) for hit in hits):
+                    score += max(1.0, min(3.0, len(tag) / 2.0))
         caption = entry.get("caption") or ""
-        if caption and caption in text:
-            score += 2.0
+        if len(caption) >= 2 and caption.lower() in haystack:
+            hits = list(re.finditer(re.escape(caption.lower()), haystack))
+            if any(not re.search(r"(?:不|没|别|不是|并不|不用|没有|不要)(?:太|再|很|想|会|那么|这么)?$",
+                                 haystack[max(0, hit.start()-8):hit.start()]) for hit in hits):
+                score += 2.0
         return score
 
     def is_explicit_request(self, text: str) -> bool:
@@ -138,7 +152,7 @@ class MemeHandler:
         if key:
             self._last_sent_at[key] = now
             self._sent_history.setdefault(key, deque(maxlen=self.max_per_hour * 4)).append(now)
-        self._recent_picks.append(path)
+        self._recent_picks.setdefault(key, deque(maxlen=8)).append(path)
 
     def pick(
         self,
@@ -147,6 +161,7 @@ class MemeHandler:
         *,
         explicit: bool = False,
         probability: Optional[float] = None,
+        reply_text: str = "",
     ) -> Optional[str]:
         if not self.entries:
             return None
@@ -158,20 +173,25 @@ class MemeHandler:
         if not explicit and random.random() > chance:
             return None
 
+        recent = self._recent_picks.get(str(chat_id or ""), ())
         scored = [
-            (self.score(entry, text), entry)
+            (self.score(entry, text) + 2 * self.score(entry, reply_text), entry)
             for entry in self.entries
-            if entry["path"] not in self._recent_picks
+            if entry["path"] not in recent
+            and self._usable_image(Path(entry["path"]))
+            and (not reply_text or explicit or self.score(entry, reply_text) > 0)
         ]
         scored = [(value, entry) for value, entry in scored if value > 0]
         if not scored:
             if not explicit:
                 return None
-            scored = [(1.0, entry) for entry in self.entries if entry["path"] not in self._recent_picks]
+            scored = [(1.0, entry) for entry in self.entries
+                      if entry["path"] not in recent and self._usable_image(Path(entry["path"]))]
         if not scored:
             return None
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        top = scored[:5]
+        # Randomness may vary equivalent pictures, never relax relevance.
+        top = [pair for pair in scored if pair[0] >= scored[0][0] * 0.85]
         weights = [max(1.0, score) for score, _ in top]
         _, chosen = random.choices(top, weights=weights, k=1)[0]
         self._remember(chat_id, chosen["path"], now)

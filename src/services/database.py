@@ -10,6 +10,7 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from services import memory_curve
+from wechat.message_types import conversation_text
 
 Base = declarative_base()
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -494,7 +495,7 @@ class HistoryStore:
         for row in rows:
             role = str(row.get("role") or "user")
             name = str(row.get("sender_name") or row.get("sender_id") or "未知")
-            content = str(row.get("content") or "").strip()
+            content = conversation_text(str(row.get("content") or ""))
             if not content:
                 continue
             ts = row.get("created_at")
@@ -510,10 +511,7 @@ class HistoryStore:
                 prefix = f"[{stamp}|{age}] "
             else:
                 prefix = ""
-            if role == "assistant":
-                lines.append(f"{prefix}娜娜：{content}")
-            else:
-                lines.append(f"{prefix}{name}：{content}")
+            lines.append(f"{prefix}{name}：{content}")
         return "\n".join(lines[-max(1, int(limit)) :])
 
 

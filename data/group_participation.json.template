@@ -1,0 +1,15 @@
+{
+  "enabled": false,
+  "repeat_enabled": true,
+  "novelty_repeat_enabled": true,
+  "sample_probability": 0.25,
+  "cooldown_seconds": 60,
+  "decision_interval_seconds": 20,
+  "max_per_hour": 6,
+  "repeat_window_seconds": 120,
+  "max_message_age_seconds": 30,
+  "followup_window_seconds": 180,
+  "followup_cooldown_seconds": 0,
+  "followup_max_per_minute": 6,
+  "followup_max_per_hour": 60
+}

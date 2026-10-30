@@ -80,11 +80,18 @@ class ProactiveTests(unittest.TestCase):
         service.quiet_time = SimpleNamespace(start="00:00", end="23:59")
         self.assertTrue(service.in_quiet_hours())
 
-    def test_group_poke_takes_priority(self):
+    def test_group_name_is_never_used_as_a_poke_member(self):
         service = self.make_service()
         service.state["chats"]["群B"] = {"next_at": 0}
         service._tick()
-        self.assertEqual(self.wx.pokes, ["群B"])
+        self.assertEqual(self.wx.pokes, [])
+        self.assertEqual(len(self.wx.sent), 1)
+
+    def test_disabled_service_cannot_send_even_when_tick_is_called(self):
+        service = self.make_service(enabled=False)
+        service.state["chats"]["群B"] = {"next_at": 0}
+        service._tick()
+        self.assertEqual(self.wx.pokes, [])
         self.assertEqual(self.wx.sent, [])
 
     def test_text_message_is_sent_when_poke_is_disabled(self):

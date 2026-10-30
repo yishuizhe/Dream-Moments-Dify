@@ -32,7 +32,17 @@ class ReplyNaturalnessTests(unittest.TestCase):
         )
         varied = handler._vary_repeated_reply("group", answer, is_group=True)
         self.assertNotEqual(varied, answer)
-        self.assertTrue("问过" in varied or "轮流" in varied)
+        self.assertEqual(varied, "")
+
+    def test_repeat_tracking_is_scoped_to_one_chat(self):
+        handler = self.make_handler()
+        answer = "今天想喝绿茶。"
+
+        handler._vary_repeated_reply("chat-a", answer, is_group=False)
+        self.assertEqual(
+            handler._vary_repeated_reply("chat-b", answer, is_group=False),
+            answer,
+        )
 
     def test_reply_cooldown_scope_separates_private_and_group_chat(self):
         handler = self.make_handler()
@@ -47,16 +57,6 @@ class ReplyNaturalnessTests(unittest.TestCase):
 
         self.assertFalse(handler._should_suppress_reply(private_scope, "在呢"))
         self.assertFalse(handler._should_suppress_reply(group_scope, "在呢"))
-
-    def test_repeat_tracking_is_scoped_to_one_chat(self):
-        handler = self.make_handler()
-        answer = "今天想喝绿茶。"
-
-        handler._vary_repeated_reply("chat-a", answer, is_group=False)
-        self.assertEqual(
-            handler._vary_repeated_reply("chat-b", answer, is_group=False),
-            answer,
-        )
 
     def test_prompt_encourages_banter_instead_of_counselor_templates(self):
         prompt = build_system_prompt("persona", is_group=True)

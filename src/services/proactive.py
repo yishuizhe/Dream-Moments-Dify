@@ -205,6 +205,8 @@ class ProactiveService:
             stop_event.wait(60.0)
 
     def _tick(self) -> None:
+        if not bool(getattr(self.settings, "enabled", False)):
+            return
         now = datetime.now()
         self._reset_daily_counter(now)
         if self.in_quiet_hours(now):
@@ -222,7 +224,7 @@ class ProactiveService:
         age = self._latest_message_age_minutes(chat)
         mode = "join" if is_group and age is not None and age <= 45 else "start"
         transcript = self._transcript(chat, is_group=is_group)
-        if is_group and bool(getattr(self.settings, "poke_probability", 0.0)):
+        if not is_group and bool(getattr(self.settings, "poke_probability", 0.0)):
             if random.random() < float(getattr(self.settings, "poke_probability", 0.0)):
                 ok = False
                 try:
